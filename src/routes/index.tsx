@@ -13,22 +13,29 @@ import { Contact } from '../pages/Contact';
 import { News } from '../pages/News';
 import { NotFound } from '../pages/NotFound';
 
+import { Header } from '../components/header/Header';
+import { Footer } from '../components/footer/Footer';
+
 const AppRoutes: React.FC = () => {
 	return (
-		<Routes>
-			<Route path="/" element={<Home />} />
-			<Route path="/flavors" element={<Flavors />} />
-			<Route path="/flavors/:flavor" element={<Flavor />} />
-            <Route path="/privacy" element={<Privacy />} />
-            <Route path="/shipping" element={<Shipping />} />
-            <Route path="/stores" element={<Stores />} />
-            <Route path="/story" element={<Story />} />
-            <Route path="/cart" element={<Cart />} />
-            <Route path="/contact" element={<Contact />} />
-            <Route path="/news" element={<News />} />
-            <Route path="/404" element={<NotFound />} />
-            <Route path="/*" element={<NotFound />} />
-		</Routes>
+		<>
+			<Header />
+			<Routes>
+				<Route path="/" element={<Home />} />
+				<Route path="/flavors" element={<Flavors />} />
+				<Route path="/flavors/:flavor" element={<Flavor />} />
+				<Route path="/privacy" element={<Privacy />} />
+				<Route path="/shipping" element={<Shipping />} />
+				<Route path="/stores" element={<Stores />} />
+				<Route path="/story" element={<Story />} />
+				<Route path="/cart" element={<Cart />} />
+				<Route path="/contact" element={<Contact />} />
+				<Route path="/news" element={<News />} />
+				<Route path="/404" element={<NotFound />} />
+				<Route path="/*" element={<NotFound />} />
+			</Routes>
+			<Footer />
+		</>
 	);
 }
 

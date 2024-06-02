@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { createContext, useState } from 'react';
 import { Route, Routes } from 'react-router-dom';
 
 import { Privacy } from '../pages/Privacy';
@@ -15,10 +15,15 @@ import { NotFound } from '../pages/NotFound';
 
 import { Header } from '../components/header/Header';
 import { Footer } from '../components/footer/Footer';
+import { flavors } from '../utils/content';
 
-const AppRoutes: React.FC = () => {
+export const FlavorContext = createContext({});
+
+const AppRoutes: React.FC = (route) => {
+	const [flavor, setFlavor] = useState(flavors.find(flavor => flavor.id == route))
+
 	return (
-		<>
+		<FlavorContext.Provider value={{flavor, setFlavor}}>
 			<Header />
 			<Routes>
 				<Route path="/" element={<Home />} />
@@ -35,7 +40,7 @@ const AppRoutes: React.FC = () => {
 				<Route path="/*" element={<NotFound />} />
 			</Routes>
 			<Footer />
-		</>
+		</FlavorContext.Provider>
 	);
 }
 

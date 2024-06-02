@@ -7,6 +7,6 @@ import AppRoutes from './src/routes/index';
 hydrateRoot(
 	document.getElementById("root") as HTMLElement,
 	<BrowserRouter>
-		<AppRoutes />
+		<AppRoutes route='' />
 	</BrowserRouter>
 );

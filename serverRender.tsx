@@ -27,9 +27,7 @@ app.get('*', (req: Request, res: Response) => {
 	<body>
 		<div id="root" class="min-h-screen flex-col flex">${renderToString(
 		<StaticRouter location={req.url} >
-			<StaticProvider value={{}}>
-				<AppRoutes />
-			</StaticProvider>
+			<AppRoutes route={req.url} />
 		</StaticRouter>)}
 		</div>
 		<script src="/js/bundle.js" defer></script>

@@ -1,3 +1,26 @@
+export const header = {
+	searchActive: true,
+	links: [
+		{
+			text: 'Flavors',
+			link: '/flavors',
+			active: true
+		}, {
+			text: 'Story',
+			link: '/story',
+			active: true
+		}, {
+			text: 'Contact',
+			link: '/contact',
+			active: true
+		}, {
+			text: 'Shipping',
+			link: '/shipping',
+			active: true
+		},
+	]
+}
+
 export const siteData = {
 	name: 'Abominable Creamery',
 	tagline: 'Taste it to believe it'
@@ -13,7 +36,8 @@ export const flavors = [
 		"hasDairy": true,
 		"hasEgg": true,
 		"withoutDairy": false,
-		"withoutEgg": false
+		"withoutEgg": false,
+		"imageSrc": "images/flavor.png"
 	},
 	{
 		"id": "choco-chip-beastly-bites",

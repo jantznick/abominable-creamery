@@ -1,7 +1,14 @@
-import React from 'react'
+import React, { useContext } from 'react'
+
+import { FlavorContext } from '../routes';
 
 export const Flavor = () => {
+
+	const {
+		flavor
+	} = useContext(FlavorContext)
+
 	return (
-		<div>Flavor</div>
+		<div>Flavor: {flavor.name && flavor.name}</div>
 	)
 }

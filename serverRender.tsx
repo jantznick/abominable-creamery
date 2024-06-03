@@ -3,8 +3,6 @@ import express, { Express, Request, Response } from 'express';
 import { renderToString } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 
-import { StaticProvider } from './StaticContext';
-
 import AppRoutes from './src/routes/index';
 
 import { siteData } from './src/utils/content';
@@ -27,7 +25,7 @@ app.get('*', (req: Request, res: Response) => {
 	<body>
 		<div id="root" class="min-h-screen flex-col flex">${renderToString(
 		<StaticRouter location={req.url} >
-			<AppRoutes route={req.url} />
+			<AppRoutes />
 		</StaticRouter>)}
 		</div>
 		<script src="/js/bundle.js" defer></script>

@@ -1,14 +1,17 @@
-import React, { useContext } from 'react'
+import React from 'react'
 
-import { FlavorContext } from '../routes';
+import { useParams } from 'react-router-dom';
+import { flavors } from '../utils/content';
 
 export const Flavor = () => {
 
 	const {
 		flavor
-	} = useContext(FlavorContext)
+	} = useParams()
+
+	const flavorData = flavors.find(flavorD => flavorD.id == flavor);
 
 	return (
-		<div>Flavor: {flavor.name && flavor.name}</div>
+		<div>Flavor: {flavorData.name && flavorData.name}</div>
 	)
 }

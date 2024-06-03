@@ -1,6 +1,5 @@
-import React, { useContext } from 'react'
+import React from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FlavorContext } from '../routes'
 
 export const MiniFlavorCard = ({flavor}) => {
 	const randomNumber = Math.floor(Math.random() * 3)
@@ -10,12 +9,9 @@ export const MiniFlavorCard = ({flavor}) => {
 		2: 'blue'
 	};
 
-	const {setFlavor} = useContext(FlavorContext);
 	const navigate = useNavigate();
 
 	const handleSelectFlavor = () => {
-		console.log('clicked')
-		setFlavor(flavor);
 		navigate(`/flavors/${flavor.id}`);
 	}
 

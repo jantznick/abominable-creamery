@@ -6,7 +6,6 @@ import { MiniFlavorCard } from '../components/MiniFlavorCard'
 export const Flavors = () => {
 	return (
 		<div className='grow'>
-			<div>Flavors</div>
 
 			<div className='flex flex-wrap w-4/5 m-auto justify-center'>
 

@@ -11,17 +11,13 @@ export const MiniFlavorCard = ({flavor}) => {
 
 	const navigate = useNavigate();
 
-	const handleSelectFlavor = () => {
-		navigate(`/flavors/${flavor.id}`);
-	}
-
 	return (
-		<div onClick={handleSelectFlavor} className='flex flex-col w-1/4 p-6 m-4 rounded-lg shadow-md border-black border-2 hover:cursor-pointer'>
+		<a href={`/flavors/${flavor.id}`} className='flex flex-col w-1/4 p-6 m-4 rounded-lg shadow-md border-black border-2 hover:cursor-pointer'>
 			<div>
 				<img
 					className=""
 					src={flavor.imageSrc || `/images/${colors[randomNumber]}-soon.png`}
-					/>
+				/>
 			</div>
 
 			<div className='font-bold mt-2'>{flavor.name}</div>
@@ -30,7 +26,7 @@ export const MiniFlavorCard = ({flavor}) => {
 			<div className='mt-8'>
 				<div className=''>{flavor.description}</div>
 			</div>
-		</div>
+		</a>
 	)
 }
 

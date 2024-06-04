@@ -4,7 +4,7 @@ import { header } from '../../utils/content'
 
 export const Header = () => {
 	return (
-		<div className='flex p-4 justify-between items-center'>
+		<div id="header" className='flex mt-4 p-8 mx-4 shadow-md rounded-xl justify-between items-center bg-blue-600'>
 
 			<div className='flex justify-start'>
 				<img className="w-10" src="/images/logo.png"></img>
@@ -19,12 +19,12 @@ export const Header = () => {
 
 			<div className='flex'>
 				{header.searchActive &&
-					<span className="material-symbols-outlined">
+					<span className="text-3xl ml-8 material-symbols-outlined">
 						search
 					</span>
 				}
 				{header.shoppingActive &&
-					<span className="material-symbols-outlined">
+					<span className="text-3xl ml-8 material-symbols-outlined">
 						shopping_cart
 					</span>
 				}

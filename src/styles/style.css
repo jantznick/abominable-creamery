@@ -65,6 +65,6 @@
 	}
 
 	.header-link {
-		@apply p-2 mx-2 rounded-lg border-2 border-primary
+		@apply px-4 mx-2 py-6 hover:bg-blue-400 duration-200
 	}
 }

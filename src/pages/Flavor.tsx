@@ -12,6 +12,6 @@ export const Flavor = () => {
 	const flavorData = flavors.find(flavorD => flavorD.id == flavor);
 
 	return (
-		<div>Flavor: {flavorData.name && flavorData.name}</div>
+		<div className='grow'>Flavor: {flavorData.name && flavorData.name}</div>
 	)
 }

@@ -1,5 +1,6 @@
 export const header = {
 	searchActive: true,
+	shoppingActive: true,
 	links: [
 		{
 			text: 'Flavors',
@@ -20,6 +21,50 @@ export const header = {
 		},
 	]
 }
+
+export const footerColumns = [
+	{
+		title: 'Contact Us',
+		links: [
+			{
+				text: 'Contact Page',
+				ahref: '/contact'
+			}, {
+				text: 'hello@abominablecreamery.com',
+				ahref: 'mailto:hello@abominablecreamery.com'
+			}, {
+				text: 'phonenumber',
+				ahref: 'tel:1234567890'
+			}
+		]
+	},
+	{
+		title: 'Legal',
+		links: [
+			{
+				text: 'Privacy Policy',
+				ahref: '/privacy'
+			}, {
+				text: 'Returns',
+				ahref: '/returns'
+			}
+		]
+	}, {
+		title: 'Links',
+		links: [
+			{
+				text: 'About Us',
+				ahref: '/about-us'
+			}, {
+				text: 'Flavors',
+				ahref: '/flavors'
+			}, {
+				text: 'News',
+				ahref: '/news'
+			}
+		]
+	}
+]
 
 export const siteData = {
 	name: 'Abominable Creamery',

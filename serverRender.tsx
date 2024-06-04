@@ -21,6 +21,7 @@ app.get('*', (req: Request, res: Response) => {
 		<title>${siteData.name} - ${siteData.tagline}</title>
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
 		<link href="/css/style.css" rel="stylesheet">
+		<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
 	</head>
 	<body>
 		<div id="root" class="min-h-screen flex-col flex">${renderToString(

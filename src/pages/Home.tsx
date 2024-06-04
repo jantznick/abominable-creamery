@@ -3,6 +3,6 @@ import { siteData } from '../utils/content'
 
 export const Home = () => {
 	return (
-		<div>{siteData.name} - {siteData.tagline}</div>
+		<div className='grow'>{siteData.name} - {siteData.tagline}</div>
 	)
 }

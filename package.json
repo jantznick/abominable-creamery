@@ -7,17 +7,18 @@
 		"start": "npm run build-app & npm run build-watch-css & npm run run-server",
 		"run-server": "nodemon ./built/server.js",
 		"build-app": "NODE_ENV=development webpack -w",
-		"build-static": "NODE_ENV=development webpack --config static.config.js",
-		"build-static-prod": "npm run build-css & NODE_ENV=production webpack --config static.config.js",
 		"build-css": "tailwindcss -i ./src/styles/style.css -o ./public/css/style.css",
 		"build-watch-css": "tailwindcss -i ./src/styles/style.css -o ./public/css/style.css --watch",
-		"build-server-prod": "npm run build-css & NODE_ENV=production webpack --config server.config.js"
+		"build-server-prod": "npm run build-css & NODE_ENV=production webpack",
+		"postinstall": "npm run build-server-prod"
 	},
 	"keywords": [],
 	"author": "",
 	"license": "ISC",
 	"dependencies": {
+		"classnames": "^2.5.1",
 		"express": "^4.19.2",
+		"fuzzysort": "^3.0.1",
 		"nodemon": "^3.1.2",
 		"react": "^18.3.0",
 		"react-dom": "^18.3.0",

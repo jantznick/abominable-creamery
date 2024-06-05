@@ -12,10 +12,10 @@ export const Footer = () => {
 		<div className='rounded-xl min-w-100% bg-blue-600 text-white flex flex-wrap p-8 mx-4 mb-4 shadow-md'>
 
 			<div className="footer-top flex justify-between w-full">
-				<div className="footer-logo w-[25%] flex justify-center">
+				<div className="footer-logo w-[33%] flex">
 					<img className="w-full max-w-32" src="/images/logo-white.png"></img>
 				</div>
-				<div className="footer-links grow flex justify-end">
+				<div className="footer-links grow flex justify-between">
 					{footerColumns.map((column, i) =>
 						<FooterColumn column={column} key={i} />
 					)}

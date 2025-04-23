@@ -37,7 +37,19 @@ const CartItemRow: React.FC<CartItemRowProps> = ({ item }) => {
 				<img src={imageToDisplay} alt={item.name} className="w-16 h-16 object-cover rounded-md shadow-sm" />
 				<div>
 					{/* Link to the main product/flavor page using productId */}
-					<Link to={`/flavors/${item.productId}`} className="font-semibold text-lg text-slate-800 hover:text-indigo-600 transition-colors duration-200">{item.name}</Link>
+					{/* TODO: Need slug here! CartItem currently only has productId. */}
+					{/* Need to either: 
+						 1. Add slug to CartItem (requires updating CartContext, additem call in Flavor.tsx) 
+						 2. Or, look up the slug using productId from the main product context. (More complex in CartItemRow) 
+						 Option 1 is cleaner if slug is needed often for cart items. 
+						 Let's assume we'll add slug to CartItem later. For now, link still uses productId. */}
+					<Link 
+						// Use slug for linking now that it's in CartItem
+						to={item.slug ? `/flavors/${item.slug}` : '/flavors'} 
+						className="font-semibold text-lg text-slate-800 hover:text-indigo-600 transition-colors duration-200"
+					 >
+					 {item.name}
+					</Link>
 					{/* Display the price string directly */}
 					<p className="text-sm text-slate-500">${item.price} each</p> 
 					<button onClick={handleRemove} className="text-xs text-red-500 hover:text-red-700 mt-1 transition-colors duration-200">Remove</button>

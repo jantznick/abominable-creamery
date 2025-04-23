@@ -49,8 +49,10 @@ export const getStripeProducts = async (stripe: Stripe): Promise<Flavor[]> => {
                 priceId: price.id,
                 price: formatPrice(price.unit_amount, price.currency),
                 currency: price.currency,
-                packSize: price.metadata?.packSize || null, // Get from Price metadata
-                unitDescription: price.metadata?.unitDescription || null, // Get from Price metadata
+                packSize: price.metadata?.packSize || null,
+                unitDescription: price.metadata?.unitDescription || null,
+                displayName: price.metadata?.displayName || null,
+                isDefault: product.default_price === price.id
             }));
 
             // 5. Construct the Flavor object
@@ -65,6 +67,7 @@ export const getStripeProducts = async (stripe: Stripe): Promise<Flavor[]> => {
                 withoutEgg: parseBooleanMetadata(product.metadata?.withoutEgg),
                 imageSrc: product.images?.length > 0 ? product.images[0] : null,
                 prices: priceOptions, // Assign the array of mapped prices
+                slug: product.metadata?.slug || null // Get slug from metadata
             };
             return flavor;
         });

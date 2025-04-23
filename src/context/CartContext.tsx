@@ -2,20 +2,22 @@ import React, { createContext, useState, useContext, ReactNode, useMemo, useEffe
 
 // --- Types ---
 
-// Updated CartItem type to include productId
+// Updated CartItem type to include productId and slug
 export interface CartItem {
     priceId: string;    // Stripe Price ID (unique identifier for the cart item)
-    productId: string;  // Stripe Product ID (for linking back to product page)
+    productId: string;  // Stripe Product ID
+    slug: string | null; // Slug for linking
     name: string;       // Name of the item (including pack description, e.g., "Vanilla (Pint)")
     price: string;      // Price per unit (string format, e.g., "5.99")
     quantity: number;   // Number of units in the cart
     imageSrc?: string;  // Optional image source (product image)
 }
 
-// Update payload to include productId
+// Update payload to include productId and slug
 export interface AddItemPayload {
     priceId: string;
     productId: string;
+    slug: string | null;
     name: string;
     price: string; 
     imageSrc?: string;
@@ -32,7 +34,7 @@ interface CartContextState {
 }
 
 // --- Constants ---
-const LOCAL_STORAGE_KEY = 'abominableCreameryCartItems_v3'; // Update key again
+const LOCAL_STORAGE_KEY = 'abominableCreameryCartItems_v4'; // Update key again
 
 // --- Context ---
 const CartContext = createContext<CartContextState | undefined>(undefined);
@@ -44,19 +46,20 @@ const getInitialState = (): CartItem[] => {
             const storedItems = window.localStorage.getItem(LOCAL_STORAGE_KEY);
             if (storedItems) {
                 const parsedItems = JSON.parse(storedItems);
-                // Update validation to check for productId too
+                // Update validation to check for slug (allow null)
                 if (Array.isArray(parsedItems) && parsedItems.every(item => 
                     item && 
                     typeof item.priceId === 'string' &&
-                    typeof item.productId === 'string' // Check productId
+                    typeof item.productId === 'string' &&
+                    (typeof item.slug === 'string' || item.slug === null) // Check slug
                 )) {
                     return parsedItems;
                 }
-                console.warn("Invalid v3 cart data found in localStorage, resetting.");
+                console.warn("Invalid v4 cart data found in localStorage, resetting.");
                 window.localStorage.removeItem(LOCAL_STORAGE_KEY);
             }
         } catch (error) {
-            console.error("Error reading v3 cart items from localStorage:", error);
+            console.error("Error reading v4 cart items from localStorage:", error);
             // window.localStorage.removeItem(LOCAL_STORAGE_KEY);
         }
     }
@@ -82,7 +85,7 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
         }
     }, [items]); 
 
-    // Add item to cart (using priceId as identifier, store productId)
+    // Add item to cart (store slug)
     const addItem = (itemToAdd: AddItemPayload, quantity: number = 1) => {
         setItems(prevItems => {
             const existingItem = prevItems.find(item => item.priceId === itemToAdd.priceId);
@@ -93,10 +96,11 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
                         : item
                 );
             } else {
-                // Add new item, including productId
+                // Add new item, including slug
                 const newItem: CartItem = {
                     priceId: itemToAdd.priceId,
-                    productId: itemToAdd.productId, // Store productId
+                    productId: itemToAdd.productId, 
+                    slug: itemToAdd.slug, // Store slug
                     name: itemToAdd.name,
                     price: itemToAdd.price,
                     quantity: quantity,
@@ -105,7 +109,7 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
                 return [...prevItems, newItem];
             }
         });
-        console.log("Added item (Price ID):", itemToAdd.priceId, "Product ID:", itemToAdd.productId, "Quantity:", quantity);
+        console.log("Added item (Price ID):", itemToAdd.priceId, "Product ID:", itemToAdd.productId, "Slug:", itemToAdd.slug, "Quantity:", quantity);
     };
 
     // Remove item from cart (using priceId)

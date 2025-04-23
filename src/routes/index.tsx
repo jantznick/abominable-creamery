@@ -31,7 +31,7 @@ const AppRoutes: React.FC = () => {
 				<Routes>
 					<Route path="/" element={<Home />} />
 					<Route path="/flavors" element={<Flavors />} />
-					<Route path="/flavors/:flavor" element={<Flavor />} />
+					<Route path="/flavors/:slug" element={<Flavor />} />
 					<Route path="/privacy" element={<Privacy />} />
 					<Route path="/shipping" element={<Shipping />} />
 					<Route path="/search" element={<Search />} />

@@ -19,18 +19,19 @@ const colors: Record<number, string> = {
 export const Flavor = () => {
 	const [quantity, setQuantity] = useState(1); 
 	const [selectedPrice, setSelectedPrice] = useState<PriceOption | null>(null); // State for selected price option
-	const { flavor: flavorId } = useParams<{ flavor: string }>(); 
+	// Get slug from URL params instead of flavorId
+	const { slug } = useParams<{ slug: string }>(); 
 	const { addItem } = useCart(); 
 	const { flavors } = useProducts(); // Get flavors from context
 
-	// Find the flavor from context data
-	const flavorData: FlavorType | undefined = flavors.find(f => f.id === flavorId);
+	// Find the flavor from context data using the slug
+	const flavorData: FlavorType | undefined = flavors.find(f => f.slug === slug);
 
 	// Effect to set the default selected price when flavorData loads/changes
 	useEffect(() => {
 		if (flavorData && flavorData.prices.length > 0) {
-			// Select the first price option by default, or implement logic to find a specific default
-			setSelectedPrice(flavorData.prices[0]); 
+			// Select the default price option, or fall back to the first one
+			setSelectedPrice(flavorData.prices.find(p => p.isDefault) || flavorData.prices[0]); 
 		} else {
 			setSelectedPrice(null);
 		}
@@ -70,6 +71,7 @@ export const Flavor = () => {
 		const itemPayload: AddItemPayload = {
 			priceId: selectedPrice.priceId,
 			productId: flavorData.id,
+			slug: flavorData.slug,
 			name: `${flavorData.name} ${selectedPrice.unitDescription ? `(${selectedPrice.unitDescription})` : ''}`,
 			price: selectedPrice.price, // Pass price as string now
 			imageSrc: flavorData.imageSrc || undefined // Ensure undefined if null
@@ -105,18 +107,26 @@ export const Flavor = () => {
 					{/* Price Options - Using Radio Buttons */}
 					<div className="space-y-2 pt-3">
 						<h3 className="text-lg font-medium text-slate-800">Select Option:</h3>
-						{flavorData.prices.map((priceOpt) => (
+						{[...flavorData.prices] // Create a shallow copy to avoid mutating original data
+							.sort((a, b) => {
+								// Prioritize the default price
+								if (a.isDefault && !b.isDefault) return -1;
+								if (!a.isDefault && b.isDefault) return 1;
+								// Optional: Add secondary sort logic here if needed (e.g., by price)
+								return 0; // Maintain original order for non-defaults
+							})
+							.map((priceOpt) => (
 							<label key={priceOpt.priceId} className="flex items-center space-x-3 p-3 border border-slate-200 rounded-md hover:bg-slate-50 cursor-pointer transition-colors duration-150">
 								<input
 									type="radio"
-								name={`priceOption-${flavorData.id}`}
-								value={priceOpt.priceId}
-								checked={selectedPrice?.priceId === priceOpt.priceId}
-								onChange={handlePriceSelectionChange}
-								className="form-radio h-5 w-5 text-amber-600 focus:ring-amber-500 border-slate-300"
+									name={`priceOption-${flavorData.id}`}
+									value={priceOpt.priceId}
+									checked={selectedPrice?.priceId === priceOpt.priceId}
+									onChange={handlePriceSelectionChange}
+									className="form-radio h-5 w-5 text-amber-600 focus:ring-amber-500 border-slate-300"
 								/>
 								<span className="flex-grow">
-									<span className="block text-md font-medium text-slate-700">{priceOpt.unitDescription || 'Standard'}</span>
+									<span className="block text-md font-medium text-slate-700">{priceOpt.displayName || priceOpt.unitDescription || 'Standard'}</span>
 									{/* Optional: Add packSize info if needed */}
 								</span>
 								<span className="text-xl font-semibold text-amber-600">${priceOpt.price}</span>

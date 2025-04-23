@@ -27,19 +27,25 @@ export const CartHoverCard: React.FC<CartHoverCardProps> = ({ items, total, item
     return (
         <div className="absolute top-full right-0 w-72 bg-white rounded-lg shadow-xl border border-slate-200 z-50 overflow-hidden">
             <div className="p-4 space-y-3 max-h-60 overflow-y-auto">
-                {itemsToShow.map(item, index => (
-                    <div key={index} className="flex items-center space-x-3 text-sm">
-                        <img 
-                            src={item.imageSrc || '/images/blue-soon.png'} 
-                            alt={item.name} 
-                            className="w-10 h-10 object-cover rounded flex-shrink-0"
-                        />
-                        <div className="flex-grow overflow-hidden">
-                            <p className="text-slate-800 font-medium truncate" title={item.name}>{item.name}</p>
-                            <p className="text-slate-500">Qty: {item.quantity} - ${(item.price * item.quantity).toFixed(2)}</p>
+                {itemsToShow.map((item, index) => {
+                    const priceAsNumber = parseFloat(item.price);
+                    const isValidPrice = !isNaN(priceAsNumber);
+                    const itemTotal = isValidPrice ? (priceAsNumber * item.quantity).toFixed(2) : 'N/A';
+
+                    return (
+                        <div key={item.priceId} className="flex items-center space-x-3 text-sm">
+                            <img 
+                                src={item.imageSrc || '/images/blue-soon.png'} 
+                                alt={item.name} 
+                                className="w-10 h-10 object-cover rounded flex-shrink-0"
+                            />
+                            <div className="flex-grow overflow-hidden">
+                                <p className="text-slate-800 font-medium truncate" title={item.name}>{item.name}</p>
+                                <p className="text-slate-500">Qty: {item.quantity} - ${itemTotal}</p>
+                            </div>
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
                 {remainingItems > 0 && (
                     <p className="text-xs text-slate-500 text-center pt-2">+ {remainingItems} more item(s)...</p>
                 )}

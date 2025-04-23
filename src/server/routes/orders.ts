@@ -2,6 +2,20 @@ import express, { Router, Request, Response, NextFunction } from 'express';
 import prisma from '../db'; // Import the singleton Prisma client
 import { z, infer as ZodInfer } from 'zod'; // Using Zod for validation
 import { Prisma } from '@prisma/client'; // Import Prisma types
+import Stripe from 'stripe'; // Import Stripe
+import dotenv from 'dotenv'; // Import dotenv
+
+// Load environment variables
+dotenv.config();
+
+// Initialize Stripe (similar to serverRender.tsx)
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
+if (!stripeSecretKey) {
+    console.error("ORDERS ROUTE Error: STRIPE_SECRET_KEY is not set in the environment variables.");
+    // Depending on requirements, you might handle this differently, 
+    // but updating PaymentIntent will fail without the key.
+}
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2025-03-31.basil' }) : null;
 
 // --- Zod Schemas for Validation (Aligned with Prisma Schema) ---
 const AddressSchema = z.object({
@@ -114,6 +128,28 @@ router.post('/', async (req: Request, res: Response) => {
             // If items are needed in response, a separate query/include would be necessary
             return order; 
         });
+
+        // --- Update Stripe PaymentIntent Metadata (After successful DB transaction) ---
+        if (stripe) {
+            try {
+                await stripe.paymentIntents.update(paymentIntentId, {
+                    metadata: { 
+                        // Add or update the order_id. This merges with existing metadata by default.
+                        // If a key exists, it's updated; otherwise, it's added.
+                        order_id: newOrder.id 
+                    }
+                });
+                console.log(`Successfully updated Stripe PaymentIntent ${paymentIntentId} with order ID ${newOrder.id}`);
+            } catch (stripeError) {
+                // Log the error but don't fail the response to the client,
+                // as the order *was* created in the database.
+                console.error(`Failed to update Stripe PaymentIntent ${paymentIntentId} metadata:`, stripeError);
+                // Optional: Could queue this for retry or notify monitoring.
+            }
+        } else {
+             console.warn(`Stripe not initialized. Could not update PaymentIntent ${paymentIntentId} metadata.`);
+        }
+        // --- End Stripe Update ---
 
         console.log(`Order ${newOrder.id} created successfully for ${userId ? `user ${userId}` : `guest ${contactInfo.email}`}`);
         res.status(201).json({ 

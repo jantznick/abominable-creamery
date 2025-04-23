@@ -20,15 +20,19 @@ export const MiniFlavorCard: React.FC<MiniFlavorCardProps> = ({flavor}) => {
 		2: 'blue'
 	};
 
-	// Find the default price or the first price if none is default (e.g., single pint price)
-	// For simplicity, let's just take the first price for display here.
-	// A more robust approach might involve sorting or checking metadata.
-	const displayPrice = flavor.prices.length > 0 ? flavor.prices[0] : null;
+	// Separate default price from other prices
+	const defaultPrice = flavor.prices.find(p => p.isDefault);
+	const otherPrices = flavor.prices.filter(p => !p.isDefault);
 
 	return (
 		<Link
-			to={`/flavors/${flavor.id}`}
-			className='group flex flex-col w-full sm:w-[calc(50%-0.75rem)] lg:w-[calc(25%-1.125rem)] rounded-lg shadow-md border border-slate-200 hover:shadow-lg transform transition duration-300 ease-in-out hover:-translate-y-1 bg-white overflow-hidden'
+			// Use slug for the URL, fallback if missing
+			to={flavor.slug ? `/flavors/${flavor.slug}` : '/flavors'} 
+			// Add a title attribute for better UX if slug is missing
+			title={!flavor.slug ? 'Flavor details unavailable' : flavor.name}
+			className={`group flex flex-col w-full sm:w-[calc(50%-0.75rem)] lg:w-[calc(25%-1.125rem)] rounded-lg shadow-md border border-slate-200 hover:shadow-lg transform transition duration-300 ease-in-out hover:-translate-y-1 bg-white overflow-hidden ${
+				!flavor.slug ? 'opacity-70 pointer-events-none' : '' // Visually indicate if link is just a fallback
+			}`}
 		>
 			<div className='aspect-square overflow-hidden'>
 				<img
@@ -46,13 +50,21 @@ export const MiniFlavorCard: React.FC<MiniFlavorCardProps> = ({flavor}) => {
 				{/* Handle potentially null description */} 
 				<p className='text-sm text-slate-600 line-clamp-3 mb-3 flex-grow'>{flavor.description || 'No description available.'}</p> 
 
-				{/* Display the price options */}
+				{/* Display prices: Default first, then others */}
 				<div className="mt-auto pt-2">
-					{flavor.prices.map(priceOpt => (
-						<p key={priceOpt.priceId} className="font-semibold text-md text-amber-600">
-							${priceOpt.price} {priceOpt.unitDescription ? `(${priceOpt.unitDescription})` : ''}
+					{/* Render default price if it exists */} 
+					{defaultPrice && (
+						<p key={defaultPrice.priceId} className="font-semibold text-lg text-amber-700"> {/* Slightly different style? */} 
+							{defaultPrice.displayName || defaultPrice.unitDescription || 'Default'}: ${defaultPrice.price}
+						</p>
+					)}
+					{/* Render other prices */} 
+					{otherPrices.map(priceOpt => (
+						<p key={priceOpt.priceId} className="font-semibold text-md text-amber-600"> {/* Original style */} 
+							{priceOpt.displayName || priceOpt.unitDescription || 'Option'}: ${priceOpt.price}
 						</p>
 					))}
+					{/* Handle case where no prices exist at all */} 
 					{flavor.prices.length === 0 && (
 						<p className="font-semibold text-md text-red-600">Not available</p>
 					)}

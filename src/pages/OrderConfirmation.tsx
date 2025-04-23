@@ -17,6 +17,9 @@ export const OrderConfirmation = () => {
     const [message, setMessage] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const [isSuccess, setIsSuccess] = useState<boolean | null>(null);
+    const [hasFetched, setHasFetched] = useState(false);
+
+    const clientSecret = searchParams.get('payment_intent_client_secret');
 
     useEffect(() => {
         stripePromise.then(instance => {
@@ -25,58 +28,60 @@ export const OrderConfirmation = () => {
     }, []);
 
     useEffect(() => {
-        if (!stripeInstance) {
-            // Stripe.js hasn't loaded yet. Make sure to disable
-            // form submission until Stripe.js has loaded.
-             setMessage("Initializing...");
-            return;
-        }
+        if (stripeInstance && clientSecret && !hasFetched) {
+            setIsLoading(true);
+            setMessage(null);
+            setHasFetched(true);
 
-        const clientSecret = searchParams.get('payment_intent_client_secret');
-        const redirectStatus = searchParams.get('redirect_status');
+            console.log("Retrieving Payment Intent Status...")
 
-        if (!clientSecret) {
+            stripeInstance
+                .retrievePaymentIntent(clientSecret)
+                .then(({ paymentIntent }) => {
+                    switch (paymentIntent?.status) {
+                        case 'succeeded':
+                            setMessage('Payment successful! Your order is confirmed.');
+                            setIsSuccess(true);
+                            console.log("Payment succeeded, clearing cart.");
+                            clearCart();
+                            break;
+                        case 'processing':
+                            setMessage("Your payment is processing. We'll update you when payment is received.");
+                            setIsSuccess(null);
+                            break;
+                        case 'requires_payment_method':
+                            setMessage('Payment failed. Please try another payment method.');
+                            setIsSuccess(false);
+                            break;
+                        default:
+                            setMessage('Something went wrong processing your payment.');
+                            setIsSuccess(false);
+                            break;
+                    }
+                    setIsLoading(false);
+                })
+                .catch(error => {
+                    console.error("Error retrieving payment intent:", error);
+                    setMessage("Failed to retrieve payment status. Please contact support.");
+                    setIsLoading(false);
+                    setIsSuccess(false);
+                });
+        } else if (!clientSecret && !isLoading && !message) {
             setMessage("Error: Missing payment information. Please contact support.");
-            setIsLoading(false);
             setIsSuccess(false);
-            return;
+        } else if (!stripeInstance && !isLoading && !message) {
+            setMessage("Initializing Payment System...");
         }
+    }, [stripeInstance, clientSecret, clearCart, hasFetched]);
 
-        setIsLoading(true);
-        setMessage(null); // Clear previous messages
-
-        stripeInstance
-            .retrievePaymentIntent(clientSecret)
-            .then(({ paymentIntent }) => {
-                switch (paymentIntent?.status) {
-                    case 'succeeded':
-                        setMessage('Payment successful! Your order is confirmed.');
-                        setIsSuccess(true);
-                        console.log("Payment succeeded, clearing cart.");
-                        clearCart(); // Clear the cart on success
-                        break;
-                    case 'processing':
-                        setMessage("Your payment is processing. We'll update you when payment is received.");
-                        setIsSuccess(null); // indeterminate state
-                        break;
-                    case 'requires_payment_method':
-                        setMessage('Payment failed. Please try another payment method.');
-                        setIsSuccess(false);
-                        break;
-                    default:
-                        setMessage('Something went wrong processing your payment.');
-                        setIsSuccess(false);
-                        break;
-                }
-                setIsLoading(false);
-            })
-            .catch(error => {
-                console.error("Error retrieving payment intent:", error);
-                setMessage("Failed to retrieve payment status. Please contact support.");
-                setIsLoading(false);
-                setIsSuccess(false);
-            });
-    }, [stripeInstance, searchParams, clearCart]);
+    useEffect(() => {
+        if (!clientSecret && !stripeInstance) {
+            setIsLoading(true);
+            setMessage("Loading...");
+        } else if (!clientSecret) {
+            setIsLoading(false);
+        }
+    }, [clientSecret, stripeInstance]);
 
     const renderContent = () => {
         if (isLoading) {

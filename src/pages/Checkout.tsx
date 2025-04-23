@@ -170,7 +170,7 @@ export const Checkout = () => {
     const totalInDollars = total; // Use the calculated total for checkoutData
 
     // Validation Logic
-    const canCompleteContact = useMemo(() => email.trim() !== '' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), [email]);
+    const canCompleteContact = useMemo(() => email.trim() !== '' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && phone.trim() !== '', [email, phone]);
     const canCompleteShipping = useMemo(() => 
         fullName.trim() !== '' && 
         address1.trim() !== '' && 
@@ -394,7 +394,7 @@ export const Checkout = () => {
                             {activeSection === 'contact' && (
                                 <div className="space-y-4">
                                     <FormInput label="Email Address" id="email" type="email" value={email} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} required placeholder="you@example.com" />
-                                    <FormInput label="Phone Number (Optional)" id="phone" type="tel" value={phone} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPhone(e.target.value)} placeholder="(555) 123-4567" />
+                                    <FormInput label="Phone Number" id="phone" type="tel" value={phone} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPhone(e.target.value)} required placeholder="(555) 123-4567" />
                                     <button 
                                         type="button"
                                         onClick={handleContinueToShipping}

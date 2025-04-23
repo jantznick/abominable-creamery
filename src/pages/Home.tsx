@@ -41,7 +41,7 @@ export const Home = () => {
 					<h2 className="text-3xl md:text-4xl font-bold text-center text-slate-900 mb-10 md:mb-16">
 						Our Most Legendary Flavors
 					</h2>
-					<div className='flex flex-wrap justify-center gap-4 md:gap-6 lg:gap-8'>
+					<div className='flex flex-wrap justify-center gap-4 md:gap-6 lg:gap-9'>
 						{featuredFlavors.map((flavor, i) => (
 							<MiniFlavorCard flavor={flavor} key={i} />
 						))}

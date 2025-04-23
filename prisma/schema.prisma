@@ -1,0 +1,96 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum OrderStatus {
+  PENDING   // Order created, payment maybe processing or not yet attempted
+  PAID      // Payment successful
+  SHIPPED   // Order shipped to customer
+  FAILED    // Payment failed
+}
+
+// Models
+
+model User {
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  name          String?
+  passwordHash  String
+  role          UserRole @default(USER)
+  orders        Order[]  // Relation to Orders
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model Order {
+  id        Int      @id @default(autoincrement())
+  // Relation to User (optional for guest checkout)
+  userId    Int?     
+  user      User?    @relation(fields: [userId], references: [id])
+  
+  totalAmount Decimal     @db.Decimal(10, 2) // Example precision: 10 total digits, 2 decimal places
+  status      OrderStatus @default(PENDING)
+
+  // Contact Info (captured at checkout)
+  contactEmail String
+  contactPhone String? // Optional phone number
+
+  // Shipping Info (captured at checkout)
+  shippingName        String
+  shippingAddress1    String
+  shippingAddress2    String?
+  shippingCity        String
+  shippingState       String
+  shippingPostalCode  String
+  shippingCountry     String
+
+  items     OrderItem[] // Relation to OrderItems
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Add index for faster lookup of user's orders
+  @@index([userId]) 
+}
+
+model OrderItem {
+  id        Int      @id @default(autoincrement())
+  // Relation to Order
+  orderId   Int
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade) // Cascade delete if order is deleted
+
+  // Product details (snapshot at time of order)
+  productId   String   // Corresponds to flavor id (or future product ID)
+  productName String
+  quantity    Int
+  price       Decimal  @db.Decimal(10, 2) // Price *per item* at the time of order
+
+  @@index([orderId])
+}
+
+// --- Session Table Model (for connect-pg-simple) ---
+model Session {
+  sid     String   @id // Session ID, primary key
+  sess    Json     // Stores session data as JSON
+  expire  DateTime // Timestamp when the session expires
+
+  @@index([expire]) // Index for efficient session cleanup
+}

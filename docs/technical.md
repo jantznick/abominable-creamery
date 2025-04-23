@@ -4,7 +4,7 @@
 
 This document outlines the technical stack, architecture, and operational flow of the Abominable Creamery website project. The goal is to provide a comprehensive guide for developers maintaining and extending the codebase.
 
-The project is a web application for an ice cream shop, built using Node.js, React, and TypeScript, featuring server-side rendering (SSR). It is currently under development, with database integration (Prisma) and API endpoints yet to be implemented. Payment integration via Stripe is planned.
+The project is a web application for an ice cream shop, built using Node.js, React, and TypeScript, featuring server-side rendering (SSR). Key upcoming features include user authentication, persistent order storage with guest checkout, and admin order viewing.
 
 ## 2. Tech Stack
 
@@ -13,34 +13,40 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 *   **Runtime Environment:** Node.js
 *   **Primary Language:** TypeScript
 *   **Package Manager:** npm
+*   **Database:** PostgreSQL
 
 ### 2.2. Backend
 
-*   **Framework:** Express.js - Used to handle HTTP requests, serve static assets, and perform server-side rendering.
-*   **Database ORM:** Prisma - Intended for managing database interactions, migrations, and type safety.
-    *   **Database Provider:** **Not yet configured.** A `prisma/schema.prisma` file needs to be created and a database provider (e.g., PostgreSQL, MySQL, SQLite) chosen.
+*   **Framework:** Express.js - Used to handle HTTP requests, serve static assets, perform server-side rendering, and provide API endpoints.
+*   **Database ORM:** Prisma (`prisma`, `@prisma/client`) - Manages database interactions, migrations, and type safety with PostgreSQL.
+    *   **Database Driver:** `pg`
+*   **Authentication:**
+    *   **Password Hashing:** `bcrypt`
+    *   **Session Management:** `express-session` with `connect-pg-simple` for persistent PostgreSQL session storage.
 *   **Server-Side Rendering:** Implemented using `react-dom/server` (`renderToString`) and `react-router-dom/server` (`StaticRouter`) within an Express route handler (`serverRender.tsx`).
 
 ### 2.3. Frontend
 
 *   **Framework:** React v18 (`react`, `react-dom`)
 *   **Routing:** React Router v6 (`react-router-dom`) - Handles client-side navigation and defines application routes (`src/routes/index.tsx`).
-*   **State Management:** React Context API is the intended approach for managing shared state (e.g., shopping cart). No external state management libraries are currently in use.
+*   **State Management:** React Context API
+    *   `CartContext`: Manages shopping cart state (persisted via `localStorage`).
+    *   `AuthContext` (Planned): Manages user authentication state.
 *   **Styling:** Tailwind CSS v3 (`tailwindcss`) - Utility-first CSS framework for styling components. Base configuration is in `tailwind.config.js`, input CSS is `src/styles/style.css`, outputting to `public/css/style.css`.
 *   **UI Components:** Organized within `src/components/` (reusable) and `src/pages/` (route-level).
-*   **Utility:** `classnames` - Used for conditionally joining CSS class names. `fuzzysort` is available for fuzzy searching capabilities.
+*   **Utility:** `classnames`, `fuzzysort`.
 
 ### 2.4. Build & Development Tools
 
-*   **Bundler:** Webpack v5 (`webpack`, `webpack-cli`) - Bundles JavaScript/TypeScript code, CSS, and other assets for the browser (`webpack.config.js`).
-*   **Transpiler:** Babel (`babel-loader`, `babel-preset-react-app`, `.babelrc`) - Used by Webpack to transpile modern JavaScript/JSX features for wider browser compatibility.
-*   **TypeScript Compiler:** `tsc` (`typescript`, `tsconfig.json`) - Compiles TypeScript to JavaScript, primarily configured via `tsconfig.json` for type checking and build processes.
-*   **Development Server:** `nodemon` - Monitors for file changes and automatically restarts the Node.js/Express server during development.
-*   **CSS Watcher:** `tailwindcss --watch` - Monitors CSS files and rebuilds the output CSS during development.
+*   **Bundler:** Webpack v5 (`webpack`, `webpack-cli`, `webpack.DefinePlugin`) - Bundles JavaScript/TypeScript code, CSS, and other assets for the browser (`webpack.config.js`). Injects environment variables like `STRIPE_PUBLISHABLE_KEY` for frontend use.
+*   **Transpiler:** Babel (`babel-loader`, `babel-preset-react-app`, `.babelrc`) - Used by Webpack to transpile modern JavaScript/JSX features.
+*   **TypeScript Compiler:** `tsc` (`typescript`, `tsconfig.json`) - Compiles TypeScript to JavaScript.
+*   **Development Server:** `nodemon` - Monitors server files.
+*   **CSS Watcher:** `tailwindcss --watch` - Monitors CSS files.
 
-### 2.5. Integrations (Planned)
+### 2.5. Integrations
 
-*   **Payments:** Stripe (`stripe`, `@stripe/react-stripe-js`, `@stripe/stripe-js`) - Dependencies are installed, but integration logic needs implementation.
+*   **Payments:** Stripe (`stripe`, `@stripe/react-stripe-js`, `@stripe/stripe-js`) - Integrated for payment processing via Payment Intents and Payment Element.
 
 ## 3. Project Structure
 
@@ -52,7 +58,9 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 *   `/node_modules/`: Contains installed npm packages.
 *   `/package.json`: Defines project metadata, dependencies, and npm scripts.
 *   `/package-lock.json`: Records exact versions of dependencies.
-*   `/prisma/`: **(To be created)** Will contain Prisma schema (`schema.prisma`) and migration files.
+*   `/prisma/`:
+    *   `schema.prisma`: Defines database models (User, Order, OrderItem, enums) and relations.
+    *   `/migrations/`: Contains database migration files generated by `prisma migrate`.
 *   `/public/`: Static assets served directly by Express (CSS, client-side JS bundles, images).
     *   `/css/style.css`: Compiled Tailwind output.
     *   `/js/bundle.js`: Client-side JavaScript bundle from Webpack.
@@ -68,6 +76,8 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 *   `/tailwind.config.js`: Tailwind CSS configuration.
 *   `/tsconfig.json`: TypeScript configuration.
 *   `/webpack.config.js`: Webpack configuration.
+*   `/tasks/`: Contains markdown files outlining feature implementation plans.
+*   `/src/context/`: Contains React Context providers (e.g., `CartContext.tsx`, `AuthContext.tsx`).
 
 ## 4. Operational Flow
 
@@ -88,19 +98,44 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 7.  `clientRender.tsx` uses `ReactDOM.hydrateRoot` to attach React to the existing server-rendered DOM (`<div id="root">`), making the page interactive.
 8.  Subsequent navigation is handled client-side by React Router.
 
-### 4.3. API Requests (To Be Implemented)
+### 4.3. API Endpoints (Planned & Existing)
 
-*   Backend API endpoints need to be defined within the Express application.
-*   These endpoints will handle operations like:
-    *   Fetching product/flavor data (using Prisma).
-    *   Managing shopping cart state (potentially interacting with user sessions or database).
-    *   Processing orders and payments (using Stripe).
-*   These routes should likely be organized separately from the SSR catch-all route (e.g., under an `/api` prefix).
+*   API routes are defined within the Express application (likely prefixed with `/api/`).
+*   **Authentication (`/api/auth/`):**
+    *   `POST /signup`: Register new user.
+    *   `POST /login`: Authenticate user, create session.
+    *   `POST /logout`: Destroy session.
+    *   `GET /me`: Get current logged-in user details.
+*   **Payment (`/`):**
+    *   `POST /create-payment-intent`: Creates a Stripe Payment Intent.
+*   **Orders (`/api/orders/`):**
+    *   `POST /`: Create a new order (post-payment). Associates with logged-in user if available.
+    *   `GET /my`: Get orders for the current logged-in user.
+*   **Admin (`/api/admin/`):**
+    *   `GET /orders`: Get all orders (requires ADMIN role).
 
-### 4.4. State Management (Planned)
+### 4.4. State Management
 
-*   Shared client-side state (e.g., shopping cart contents, user information) will be managed using React Context API.
-*   Context providers should wrap relevant parts of the application tree, likely within `src/routes/index.tsx` or a higher-level component.
+*   **Cart:** `CartContext` manages items, persisted in `localStorage`.
+*   **Authentication:** `AuthContext` (to be implemented) will manage user login status and user data globally on the client-side.
+
+### 4.5. Checkout & Order Flow
+
+1.  User adds items to cart (`CartContext`).
+2.  User proceeds to checkout (`/checkout`).
+3.  Checkout page presents accordion: Contact -> Shipping -> Payment.
+4.  User fills contact/shipping info. Guest checkout is allowed.
+5.  On reaching the Payment section, a request is sent to `/create-payment-intent` with the final calculated total (including shipping/tax).
+6.  Backend creates Stripe PaymentIntent, returns `clientSecret`.
+7.  Frontend renders Stripe Payment Element using the `clientSecret`.
+8.  User submits payment via Stripe Element.
+9.  Stripe processes payment and redirects user to `/order-confirmation`.
+10. `OrderConfirmation` page retrieves PaymentIntent status from Stripe using URL params.
+11. **If payment `succeeded`:**
+    *   Frontend sends a `POST` request to `/api/orders` with checkout details (items, shipping, contact info).
+    *   Backend saves the `Order` and `OrderItem` data to the database (associating with `userId` if user was logged in).
+    *   Frontend clears the cart (`CartContext`) and displays a success message.
+12. **If payment fails/pending:** Display appropriate status/error message.
 
 ## 5. Key Areas & Conventions
 
@@ -109,17 +144,23 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 *   **Routing:** Client-side routes defined in `src/routes/index.tsx` using `react-router-dom`. SSR handled via catch-all in `serverRender.tsx`.
 *   **Styling:** Primarily via Tailwind CSS utility classes applied directly in components. Base styles in `src/styles/style.css`.
 *   **Data Fetching:** To be implemented via backend API endpoints using Express and Prisma.
-*   **Environment Variables:** Managed via `.env` file. Requires `DATABASE_URL` (once Prisma is set up) and Stripe API keys (`STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`).
+*   **Environment Variables:** Managed via `.env` file. Requires `DATABASE_URL`, `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `SESSION_SECRET`.
+*   **Database Schema:** Defined in `prisma/schema.prisma`.
+*   **Migrations:** Managed via `npx prisma migrate dev`.
+*   **Authentication:** Session-based using `express-session` and `connect-pg-simple`.
+*   **Authorization:** Simple role check (e.g., `req.session.user.role === 'ADMIN'`) in specific API route middleware.
 
 ## 6. Setup & Running Locally
 
 1.  Clone the repository.
-2.  Install dependencies: `npm install`
-3.  **Set up Prisma:**
-    *   Create `prisma/schema.prisma`. Define datasource (database provider and connection URL) and initial models (e.g., `Flavor`, `Order`).
-    *   Create a `.env` file and add the `DATABASE_URL` environment variable corresponding to your chosen database (e.g., `DATABASE_URL="postgresql://user:password@host:port/database"`).
-    *   Run initial migration: `npx prisma migrate dev --name init`
-4.  **Configure Stripe:** Add `STRIPE_SECRET_KEY` and `STRIPE_PUBLISHABLE_KEY` to your `.env` file.
-5.  **(Optional) Seed Database:** If seeding scripts are created (`prisma.seed`), run `npx prisma db seed`.
-6.  Start the development server: `npm start`
-7.  Access the application at `http://localhost:3000`. 
+2.  Create a `.env` file based on `.env.example` (if it exists) or add the following:
+    *   `DATABASE_URL="postgresql://user:password@host:port/database"` (Replace with your PostgreSQL connection string)
+    *   `STRIPE_SECRET_KEY=sk_test_...`
+    *   `STRIPE_PUBLISHABLE_KEY=pk_test_...`
+    *   `SESSION_SECRET=your_strong_random_session_secret` (Generate a strong random string)
+3.  Install dependencies: `npm install`
+4.  **Ensure PostgreSQL is running** and accessible via the `DATABASE_URL`.
+5.  Run Prisma migrations: `npx prisma migrate dev` (Creates DB if needed, applies migrations)
+6.  **(Optional) Seed Database:** `npx prisma db seed` (if seed script is configured).
+7.  Start the development server: `npm start`
+8.  Access the application at `http://localhost:3000`. 

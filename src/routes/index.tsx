@@ -16,9 +16,11 @@ import { Search } from '../pages/Search';
 import { NewsArticlePage } from '../pages/NewsArticlePage';
 import { Checkout } from '../pages/Checkout';
 import { OrderConfirmation } from '../pages/OrderConfirmation';
+import Profile from '../pages/Profile';
 
 import { Header } from '../components/header/Header';
 import { Footer } from '../components/footer/Footer';
+import ProtectedRoute from '../components/common/ProtectedRoute';
 
 const AppRoutes: React.FC = () => {
 
@@ -41,6 +43,9 @@ const AppRoutes: React.FC = () => {
 					<Route path="/contact" element={<Contact />} />
 					<Route path="/news" element={<News />} />
 					<Route path="/news/:slug" element={<NewsArticlePage />} />
+					<Route element={<ProtectedRoute />}>
+						<Route path="/profile" element={<Profile />} />
+					</Route>
 					<Route path="/404" element={<NotFound />} />
 					<Route path="/*" element={<NotFound />} />
 				</Routes>

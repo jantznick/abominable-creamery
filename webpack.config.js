@@ -1,4 +1,5 @@
 const webpack = require('webpack');
+const nodeExternals = require('webpack-node-externals');
 require('dotenv').config(); // Load .env file
 
 const use = {
@@ -36,6 +37,9 @@ const browserConfig = {
 			'process.env.STRIPE_PUBLISHABLE_KEY': JSON.stringify(process.env.STRIPE_PUBLISHABLE_KEY)
 			// Add other variables here if needed, e.g.:
 			// 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development') 
+		}),
+		new webpack.IgnorePlugin({
+			resourceRegExp: /^pg-native$|^cloudflare:sockets$/,
 		})
 	]
 };
@@ -52,9 +56,15 @@ const serverConfig = {
 	module: {
 		rules: [use]
 	},
+	externals: [nodeExternals()],
 	resolve: {
 		extensions: ['.*', '.tsx', '.ts', '.js'],
 	},
+	plugins: [
+		new webpack.IgnorePlugin({
+			resourceRegExp: /^pg-native$|^cloudflare:sockets$/,
+		})
+	],
 	mode: "development"
 };
 

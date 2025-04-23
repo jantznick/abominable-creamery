@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart, CartItem } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
 import { loadStripe, StripeElementsOptions } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import classNames from 'classnames'; // Import classnames for conditional styling
@@ -25,12 +26,36 @@ const FormInput = ({ label, id, ...props }: { label: string; id: string; [key: s
     </div>
 );
 
+// Define expected structure for checkout data to be saved
+interface CheckoutData {
+    items: { 
+        // TODO: Verify CartItem type includes productId and name
+        // Assuming CartItem has id, name, quantity, price for now
+        productId: string; // Assuming productId is string based on OrderItem schema
+        productName: string; 
+        quantity: number;
+        price: number; // Assuming price is in dollars (as per OrderItem schema needs)
+    }[];
+    totalAmount: number; // Total in dollars
+    shippingAddress: { // Mirroring AddressSchema in orders.ts
+        fullName: string;
+        address1: string;
+        address2?: string;
+        city: string;
+        state: string;
+        postalCode: string;
+        country: string;
+    };
+    contactInfo: { // Mirroring ContactInfoSchema in orders.ts
+        email: string;
+        phone?: string;
+    };
+}
+
 // --- Checkout Form Component (contains Stripe Elements) ---
-const StripeCheckoutForm = ({ clientSecret }: { clientSecret: string }) => {
+const StripeCheckoutForm = ({ clientSecret, checkoutData }: { clientSecret: string; checkoutData: CheckoutData }) => {
     const stripe = useStripe();
     const elements = useElements();
-    const { clearCart } = useCart(); // Get clearCart
-    const navigate = useNavigate();
 
     const [message, setMessage] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
@@ -39,19 +64,34 @@ const StripeCheckoutForm = ({ clientSecret }: { clientSecret: string }) => {
         e.preventDefault();
 
         if (!stripe || !elements) {
-            // Stripe.js has not yet loaded.
             console.log("Stripe.js not loaded yet");
             return;
         }
 
+        // --- Save checkout data before confirming payment --- 
+        try {
+            // Ensure essential data is present before saving
+            if (!checkoutData || !checkoutData.items || checkoutData.items.length === 0 || !checkoutData.shippingAddress || !checkoutData.contactInfo) {
+                throw new Error("Missing essential checkout data for saving.");
+            }
+            sessionStorage.setItem('checkoutDataForConfirmation', JSON.stringify(checkoutData));
+            console.log("Checkout data saved to sessionStorage.");
+        } catch (error) {
+            console.error("Error saving checkout data to sessionStorage:", error);
+            setMessage("Error preparing order data. Please try again or contact support.");
+            // Optionally prevent payment confirmation if saving fails critically
+            // return; 
+        }
+        // --- End save checkout data ---
+
         setIsLoading(true);
         setMessage(null); // Clear previous messages
 
+        // Proceed with payment confirmation
         const { error } = await stripe.confirmPayment({
             elements,
             confirmParams: {
-                // Make sure to change this to your payment completion page
-                return_url: `${window.location.origin}/order-confirmation`, // You'll need to create this page
+                return_url: `${window.location.origin}/order-confirmation`,
             },
         });
 
@@ -90,7 +130,7 @@ const StripeCheckoutForm = ({ clientSecret }: { clientSecret: string }) => {
 }
 
 // --- Main Checkout Page Component ---
-type CheckoutSection = 'contact' | 'shipping' | 'payment';
+type CheckoutSection = 'auth_choice' | 'contact' | 'shipping' | 'payment';
 
 // --- Constants ---
 const FLAT_SHIPPING_RATE = 9.99; // Example flat shipping rate
@@ -98,10 +138,11 @@ const ESTIMATED_TAX_RATE = 0.08; // Example 8% tax rate
 
 export const Checkout = () => {
     const { items, getCartTotal, clearCart } = useCart();
+    const auth = useAuth();
     const navigate = useNavigate();
     
     // Accordion State
-    const [activeSection, setActiveSection] = useState<CheckoutSection>('contact');
+    const [activeSection, setActiveSection] = useState<CheckoutSection>('auth_choice');
     const [isContactComplete, setIsContactComplete] = useState(false);
     const [isShippingComplete, setIsShippingComplete] = useState(false);
 
@@ -127,6 +168,7 @@ export const Checkout = () => {
     const estimatedTax = subtotal * ESTIMATED_TAX_RATE;
     const total = subtotal + shippingCost + estimatedTax;
     const totalInCents = Math.round(total * 100); // Use the final total for Stripe
+    const totalInDollars = total; // Use the calculated total for checkoutData
 
     // Validation Logic
     const canCompleteContact = useMemo(() => email.trim() !== '' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email), [email]);
@@ -140,15 +182,23 @@ export const Checkout = () => {
         [fullName, address1, city, state, postalCode, country]
     );
 
-    // Effect to redirect if cart is empty (run only once on mount effectively)
+    // Effect to redirect if cart is empty
     useEffect(() => {
-        if (items.length === 0) {
+        if (items.length === 0 && activeSection !== 'auth_choice') {
             console.log("Cart is empty, redirecting to /cart");
             navigate('/cart');
         }
-    }, [items, navigate]); // Dependency on items might cause issues if cart updates mid-checkout
+    }, [items, navigate, activeSection]);
 
-    // Effect to fetch Payment Intent client secret (ONLY when payment section is active)
+    // Effect to potentially skip auth choice if already logged in
+    useEffect(() => {
+        if (activeSection === 'auth_choice' && auth.user && !auth.isLoading) {
+            console.log("User already logged in, skipping auth choice.");
+            setActiveSection('contact');
+        }
+    }, [auth.user, auth.isLoading, activeSection]);
+
+    // Effect to fetch Payment Intent client secret
     useEffect(() => {
         if (activeSection === 'payment' && !clientSecret && isShippingComplete && items.length > 0 && totalInCents > 0) {
             setIsLoadingSecret(true);
@@ -189,13 +239,21 @@ export const Checkout = () => {
              setIsLoadingSecret(false);
              setErrorLoadingSecret(null);
         }
-    }, [activeSection, isShippingComplete, items, totalInCents, clientSecret]); // Rerun if section/completion/cart changes
+    }, [activeSection, isShippingComplete, items, totalInCents, clientSecret]);
 
     // Stripe Elements options
     const appearance = { theme: 'stripe' as const };
     const options: StripeElementsOptions | undefined = clientSecret ? { clientSecret, appearance } : undefined;
 
     // Button Handlers
+    const handleGuestCheckout = () => {
+        setActiveSection('contact');
+    };
+
+    const handleLoginClick = () => {
+        auth.openLogin();
+    };
+
     const handleContinueToShipping = () => {
         if (canCompleteContact) {
             setIsContactComplete(true);
@@ -211,13 +269,12 @@ export const Checkout = () => {
     };
 
     const handleEditSection = (section: CheckoutSection) => {
-        // Allow editing only if the path is valid (e.g., can't edit payment if shipping isn't complete)
         if (section === 'contact') {
             setActiveSection('contact');
         } else if (section === 'shipping' && isContactComplete) {
             setActiveSection('shipping');
         } else if (section === 'payment' && isShippingComplete) {
-             setActiveSection('payment'); // Re-activate payment if needed
+             setActiveSection('payment');
         }
     };
 
@@ -231,7 +288,7 @@ export const Checkout = () => {
             >
                 {title}
             </h2>
-            {isComplete && activeSection !== section && (
+            {isComplete && activeSection !== section && section !== 'auth_choice' && (
                 <button 
                     type="button" 
                     onClick={() => handleEditSection(section)}
@@ -249,126 +306,188 @@ export const Checkout = () => {
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 lg:gap-12 items-start">
 
-                {/* Left Column: Form Sections */}
+                {/* Main Checkout Flow Column */}
                 <div className="lg:col-span-2 space-y-8">
-                    {/* Contact Info Section */}
-                    <div className={classNames("bg-white p-6 rounded-lg shadow-md border", activeSection === 'contact' ? 'border-indigo-300' : 'border-slate-200')}>
-                        {renderSectionHeader('contact', '1. Contact Information', isContactComplete)}
-                        {activeSection === 'contact' && (
-                            <div className="space-y-6">
-                                <FormInput label="Email Address" id="email" type="email" value={email} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} required />
-                                <FormInput label="Phone Number (Optional)" id="phone" type="tel" value={phone} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPhone(e.target.value)} />
-                                <div className="pt-2 text-right">
+
+                    {/* === AUTH CHOICE STEP === */}
+                    {activeSection === 'auth_choice' && (
+                        <div className="bg-white p-6 rounded-lg shadow-md">
+                            <h2 className="text-2xl font-semibold text-slate-800 mb-6 text-center">Welcome!</h2>
+                            <p className="text-slate-600 text-center mb-6">How would you like to proceed?</p>
+                            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+                                <button
+                                    type="button"
+                                    onClick={handleGuestCheckout}
+                                    className="w-full sm:w-auto flex-1 bg-slate-600 hover:bg-slate-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out"
+                                >
+                                    Checkout as Guest
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={handleLoginClick}
+                                    className="w-full sm:w-auto flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out"
+                                >
+                                    Login / Sign Up
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* === CONTACT INFO STEP === */}
+                    {activeSection !== 'auth_choice' && (
+                        <div className="bg-white p-6 rounded-lg shadow-md">
+                            {renderSectionHeader('contact', '1. Contact Information', isContactComplete)}
+                            {activeSection === 'contact' && (
+                                <div className="space-y-4">
+                                    <FormInput label="Email Address" id="email" type="email" value={email} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} required placeholder="you@example.com" />
+                                    <FormInput label="Phone Number (Optional)" id="phone" type="tel" value={phone} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPhone(e.target.value)} placeholder="(555) 123-4567" />
                                     <button 
                                         type="button"
                                         onClick={handleContinueToShipping}
                                         disabled={!canCompleteContact}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         Continue to Shipping
                                     </button>
                                 </div>
-                            </div>
-                        )}
-                         {isContactComplete && activeSection !== 'contact' && (
-                             <p className="text-sm text-slate-600">{email}</p> // Show summary when collapsed
-                         )}
-                    </div>
-
-                    {/* Shipping Address Section */}
-                    <div className={classNames("bg-white p-6 rounded-lg shadow-md border", activeSection === 'shipping' ? 'border-indigo-300' : 'border-slate-200', !isContactComplete ? 'opacity-50 pointer-events-none' : '')}>
-                         {renderSectionHeader('shipping', '2. Shipping Address', isShippingComplete)}
-                         {activeSection === 'shipping' && isContactComplete && (
-                            <div className="space-y-6">
-                                <FormInput label="Full Name" id="fullName" type="text" value={fullName} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFullName(e.target.value)} required />
-                                <FormInput label="Address Line 1" id="address1" type="text" value={address1} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAddress1(e.target.value)} required />
-                                <FormInput label="Address Line 2 (Optional)" id="address2" type="text" value={address2} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAddress2(e.target.value)} />
-                                <FormInput label="City" id="city" type="text" value={city} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCity(e.target.value)} required />
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    <FormInput label="State / Province" id="state" type="text" value={state} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setState(e.target.value)} required />
-                                    <FormInput label="Postal Code" id="postalCode" type="text" value={postalCode} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPostalCode(e.target.value)} required />
-                                    <FormInput label="Country" id="country" type="text" value={country} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCountry(e.target.value)} required /> 
+                            )}
+                            {activeSection !== 'contact' && isContactComplete && (
+                                <div className="text-slate-600 text-sm">
+                                    <p>Email: {email}</p>
+                                    {phone && <p>Phone: {phone}</p>}
                                 </div>
-                                <div className="pt-2 text-right">
-                                     <button 
+                            )}
+                        </div>
+                    )}
+
+                    {/* === SHIPPING INFO STEP === */}
+                    {activeSection !== 'auth_choice' && (
+                        <div className={classNames(
+                                "bg-white p-6 rounded-lg shadow-md",
+                                { 'opacity-50 pointer-events-none': !isContactComplete }
+                            )}
+                        >
+                            {renderSectionHeader('shipping', '2. Shipping Address', isShippingComplete)}
+                            {activeSection === 'shipping' && isContactComplete && (
+                                <div className="space-y-4">
+                                    <FormInput label="Full Name" id="fullName" value={fullName} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFullName(e.target.value)} required />
+                                    <FormInput label="Address Line 1" id="address1" value={address1} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAddress1(e.target.value)} required placeholder="123 Main St" />
+                                    <FormInput label="Address Line 2 (Optional)" id="address2" value={address2} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAddress2(e.target.value)} placeholder="Apartment, suite, etc." />
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <FormInput label="City" id="city" value={city} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCity(e.target.value)} required className="md:col-span-1" />
+                                        <FormInput label="State / Province" id="state" value={state} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setState(e.target.value)} required className="md:col-span-1" />
+                                        <FormInput label="Postal Code" id="postalCode" value={postalCode} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPostalCode(e.target.value)} required className="md:col-span-1" />
+                                    </div>
+                                    <FormInput label="Country" id="country" value={country} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCountry(e.target.value)} required />
+                                    <button 
                                         type="button"
                                         onClick={handleContinueToPayment}
                                         disabled={!canCompleteShipping}
-                                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         Continue to Payment
                                     </button>
                                 </div>
-                            </div>
-                         )}
-                          {isShippingComplete && activeSection !== 'shipping' && (
-                             <p className="text-sm text-slate-600">
-                                {fullName}<br/>
-                                {address1}, {address2 && `${address2}, `}<br/>
-                                {city}, {state} {postalCode}<br/>
-                                {country}
-                            </p> // Show summary when collapsed
-                         )}
-                    </div>
+                            )}
+                            {activeSection !== 'shipping' && isShippingComplete && (
+                                <div className="text-slate-600 text-sm">
+                                    <p>{fullName}</p>
+                                    <p>{address1}{address2 ? `, ${address2}` : ''}</p>
+                                    <p>{city}, {state} {postalCode}</p>
+                                    <p>{country}</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
-                    {/* Payment Section */}
-                    <div className={classNames("bg-white p-6 rounded-lg shadow-md border", activeSection === 'payment' ? 'border-indigo-300' : 'border-slate-200', !isShippingComplete ? 'opacity-50 pointer-events-none' : '')}>
-                         {renderSectionHeader('payment', '3. Payment Details', false)} {/* Payment never shows 'Edit' in this setup */}
-                         {activeSection === 'payment' && isShippingComplete && (
-                            <> {/* Fragment to group conditional rendering */} 
-                                {isLoadingSecret && ( <div className="text-center p-4 text-slate-600">Loading payment options...</div> )}\
-                                {errorLoadingSecret && ( <div className="text-center p-4 text-red-600 bg-red-50 rounded-md">Error: {errorLoadingSecret}</div> )}\
-                                {stripePromise && clientSecret && options && (
-                                    <Elements options={options} stripe={stripePromise}>
-                                        <StripeCheckoutForm clientSecret={clientSecret} />
-                                    </Elements>
-                                )}\
-                                {!stripePromise && !clientSecret && !isLoadingSecret && !errorLoadingSecret && ( 
-                                    <div className="text-center p-4 text-slate-500">Initializing payment...</div> 
-                                )}\
-                                {stripePromise === null && !errorLoadingSecret && ( 
-                                     <div className="text-center p-4 text-red-600 bg-red-50 rounded-md">Error: Stripe configuration is missing (Publishable Key).</div>
-                                )}\
-                             </>
-                         )}
+                    {/* === PAYMENT STEP === */}
+                    {activeSection !== 'auth_choice' && (
+                        <div className={classNames(
+                                "bg-white p-6 rounded-lg shadow-md",
+                                { 'opacity-50 pointer-events-none': !isShippingComplete }
+                            )}
+                        >
+                            {renderSectionHeader('payment', '3. Payment', false)}
+                            {activeSection === 'payment' && isShippingComplete && (
+                                <div>
+                                    {isLoadingSecret && <p className="text-center text-slate-500"><div className="spinner border-t-2 border-indigo-500 border-solid rounded-full w-5 h-5 animate-spin mx-auto mb-2"></div>Initializing payment...</p>}
+                                    {errorLoadingSecret && <p className="text-center text-red-600">{errorLoadingSecret}</p>}
+                                    {clientSecret && stripePromise && options && (
+                                        <Elements options={options} stripe={stripePromise}>
+                                            <StripeCheckoutForm 
+                                                clientSecret={clientSecret} 
+                                                checkoutData={{
+                                                    items: items.map(item => ({
+                                                        // TODO: Ensure CartItem has productId and correct name field
+                                                        productId: item.id, // Assuming item.id corresponds to productId (string)
+                                                        productName: item.name, // Assuming item.name exists
+                                                        quantity: item.quantity,
+                                                        price: item.price // Assuming item.price is in dollars
+                                                    })),
+                                                    totalAmount: totalInDollars, // Pass total in dollars
+                                                    shippingAddress: {
+                                                        fullName,
+                                                        address1,
+                                                        address2,
+                                                        city,
+                                                        state,
+                                                        postalCode,
+                                                        country,
+                                                    },
+                                                    contactInfo: {
+                                                        email,
+                                                        phone,
+                                                    }
+                                                }}
+                                            />
+                                        </Elements>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                </div>
+
+                {/* Order Summary Column (always visible) */}
+                <div className="lg:col-span-1">
+                    <div className="bg-slate-50 p-6 rounded-lg shadow-md sticky top-24">
+                        <h2 className="text-xl font-semibold text-slate-800 mb-6 border-b border-slate-200 pb-3">Order Summary</h2>
+                        
+                        {/* Cart Items Mini View */}
+                        <div className="space-y-4 mb-6 max-h-60 overflow-y-auto">
+                            {items.map((item) => (
+                                <div key={item.id} className="flex justify-between items-center text-sm">
+                                    <span className="flex-1 mr-2">{item.name} ({item.quantity})</span>
+                                    <span className="text-slate-700 font-medium">${(item.price * item.quantity).toFixed(2)}</span>
+                                </div>
+                            ))}
+                            {items.length === 0 && <p className="text-slate-500 text-sm text-center">(Your cart is empty)</p>}
+                        </div>
+
+                        {/* Cost Breakdown */}
+                        <div className="space-y-2 border-t border-slate-200 pt-4">
+                            <div className="flex justify-between text-sm text-slate-600">
+                                <span>Subtotal</span>
+                                <span>${subtotal.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm text-slate-600">
+                                <span>Shipping</span>
+                                <span>${shippingCost.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-sm text-slate-600">
+                                <span>Estimated Tax</span>
+                                <span>${estimatedTax.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-lg font-bold text-slate-900 border-t border-slate-300 pt-3 mt-3">
+                                <span>Total</span>
+                                <span>${total.toFixed(2)}</span>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
-                {/* Order Summary (Right Column) */}
-                <div className="lg:col-span-1 bg-white p-6 rounded-lg shadow-md sticky top-24 border border-slate-200">
-                    <h2 className="text-2xl font-semibold text-slate-800 mb-4 border-b border-slate-200 pb-3">Order Summary</h2>
-                    <div className="space-y-3 mb-6">
-                        {items.map((item: CartItem) => (
-                            <div key={item.id} className="flex justify-between items-center text-sm text-slate-600">
-                                <span>{item.name} x {item.quantity}</span>
-                                <span>${(item.price * item.quantity).toFixed(2)}</span>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="space-y-2 text-base text-slate-700 border-t border-slate-200 pt-4">
-                        <div className="flex justify-between">
-                            <span>Subtotal</span>
-                            <span>${subtotal.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                            <span>Shipping</span>
-                            <span>${shippingCost.toFixed(2)}</span>
-                        </div>
-                         <div className="flex justify-between">
-                            <span>Estimated Tax</span>
-                            <span>${estimatedTax.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between font-bold text-xl pt-3 border-t border-slate-300 mt-3">
-                            <span>Total</span>
-                            <span>${total.toFixed(2)}</span>
-                        </div>
-                    </div>
-                    <div className="text-center mt-4">
-                        <Link to="/cart" className="text-sm text-indigo-600 hover:underline">
-                            &larr; Return to Cart
-                        </Link>
-                    </div>
-                </div>
             </div>
         </div>
     );

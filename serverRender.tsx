@@ -1,12 +1,19 @@
 import React from 'react';
-import express, { Express, Request, Response } from 'express';
+import express, { Express, Request, Response, NextFunction } from 'express';
 import { renderToString } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 import Stripe from 'stripe';
 import dotenv from 'dotenv';
+import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
+import prisma from './src/server/db';
+import authRouter from './src/server/routes/auth';
+import orderRouter from './src/server/routes/orders';
+import stripeRouter from './src/server/routes/stripe';
+import { AuthProvider } from './src/context/AuthContext';
 
 import AppRoutes from './src/routes/index';
-import { CartProvider } from './src/context/CartContext';
+import AppWrapper from './src/AppWrapper';
 import { siteData } from './src/utils/content';
 
 dotenv.config();
@@ -20,12 +27,45 @@ const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2025
 
 const app: Express = express();
 
+const sessionSecret = process.env.SESSION_SECRET;
+if (!sessionSecret) {
+	console.error("CRITICAL ERROR: SESSION_SECRET is not defined in .env file. Session management will fail.");
+	// Optionally, exit the process if session secret is mandatory
+	// process.exit(1);
+}
+
+const PgSessionStore = connectPgSimple(session);
+const sessionStore = new PgSessionStore({
+	conString: process.env.DATABASE_URL,
+	tableName: 'Session',
+	// Removed prisma: prisma
+});
+
+app.use(session({
+	store: sessionStore,
+	secret: sessionSecret || 'fallback-secret-for-dev-only',
+	resave: false,
+	saveUninitialized: false,
+	cookie: {
+		secure: process.env.NODE_ENV === 'production',
+		httpOnly: true,
+		maxAge: 1000 * 60 * 60 * 24 * 7
+		// sameSite: 'lax' // Consider adding for CSRF protection
+	}
+}));
+
 app.use(express.static('public'));
 app.use(express.json());
 
-app.use("*", (req, res, next) => {
-	next()
-})
+app.use((req: Request, res: Response, next: NextFunction) => {
+	// console.log('Session ID:', req.sessionID);
+	// console.log('Session Data:', req.session);
+	next();
+});
+
+app.use('/api/auth', authRouter);
+app.use('/api/orders', orderRouter);
+app.use('/api/stripe', stripeRouter);
 
 app.post('/create-payment-intent', async (req: Request, res: Response) => {
 	if (!stripe) {
@@ -67,9 +107,9 @@ app.get('*', (req: Request, res: Response) => {
 	<body>
 		<div id="root" class="min-h-screen flex-col flex">${renderToString(
 		<StaticRouter location={req.url} >
-			<CartProvider>
+			<AppWrapper>
 				<AppRoutes />
-			</CartProvider>
+			</AppWrapper>
 		</StaticRouter>)}
 		</div>
 		<script src="/js/bundle.js" defer></script>

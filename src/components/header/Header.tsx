@@ -4,6 +4,9 @@ import { Link, useNavigate } from 'react-router-dom';
 
 import { header, siteData } from '../../utils/content'
 import { useCart } from '../../context/CartContext';
+import { useAuth } from '../../context/AuthContext';
+import LoginModal from '../auth/LoginModal';
+import SignupModal from '../auth/SignupModal';
 import { CartHoverCard } from './CartHoverCard';
 
 export const Header = () => {
@@ -13,14 +16,34 @@ export const Header = () => {
 	const [isCartHovered, setIsCartHovered] = useState(false);
 	const navigate = useNavigate();
 	const { items, getCartTotal, getItemCount } = useCart();
+	const { 
+		user, 
+		isLoading, 
+		logout, 
+		isLoginOpen, 
+		openLogin, 
+		closeLogin, 
+		isSignupOpen, 
+		openSignup, 
+		closeSignup,
+		switchToLogin,
+		switchToSignup
+	} = useAuth();
 
 	const itemCount = getItemCount();
 	const cartTotal = getCartTotal();
 
+	const handleLogout = async () => {
+		console.log("Header: Logging out...");
+		await logout();
+		console.log("Header: Logout completed.");
+		setIsMobileMenuOpen(false);
+	}
+
 	const handleSearch = () => {
 		setToggleSearch(false)
 		navigate(`search?flavor=${searchTerm}`)
-		setSearchTerm(''); // Clear search term after navigation
+		setSearchTerm('');
 	}
 
 	const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -116,6 +139,37 @@ export const Header = () => {
 					</div>
 				)}
 
+				<div className="hidden md:flex items-center space-x-2 lg:space-x-3">
+					{isLoading ? (
+						<span className="text-indigo-100 text-sm">Loading...</span>
+					) : user ? (
+						<>
+							<span className="text-indigo-100 text-sm hidden lg:inline">Hi, {user.name || user.email}</span>
+							<button
+								onClick={handleLogout}
+								className="header-link text-indigo-100 hover:text-white hover:bg-indigo-600/60 px-3 py-2 rounded-md text-sm lg:text-base font-medium transition-colors duration-200"
+							>
+								Logout
+							</button>
+						</>
+					) : (
+						<>
+							<button
+								onClick={openLogin}
+								className="header-link text-indigo-100 hover:text-white hover:bg-indigo-600/60 px-3 py-2 rounded-md text-sm lg:text-base font-medium transition-colors duration-200"
+							>
+								Login
+							</button>
+							<button
+								onClick={openSignup}
+								className="header-link text-white bg-amber-500 hover:bg-amber-600 px-3 py-2 rounded-md text-sm lg:text-base font-medium transition-colors duration-200 shadow"
+							>
+								Sign Up
+							</button>
+						</>
+					)}
+				</div>
+
 				<div className="md:hidden flex items-center">
 					<button
 						onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -153,9 +207,50 @@ export const Header = () => {
 							{link.text}
 						</Link>
 					)}
+
+					<div className="pt-4 border-t border-indigo-700">
+						{isLoading ? (
+							<span className="text-indigo-100 block px-3 py-3 text-lg font-medium">Loading...</span>
+						) : user ? (
+							<>
+								<span className="text-indigo-100 block px-3 py-3 text-lg font-medium">Hi, {user.name || user.email}</span>
+								<button
+									onClick={handleLogout}
+									className='w-full text-left header-link text-indigo-100 hover:bg-indigo-600/80 hover:text-white block px-3 py-3 rounded-md text-lg font-medium transition-colors duration-200'
+								>
+									Logout
+								</button>
+							</>
+						) : (
+							<>
+								<button
+									onClick={openLogin}
+									className='w-full text-left header-link text-indigo-100 hover:bg-indigo-600/80 hover:text-white block px-3 py-3 rounded-md text-lg font-medium transition-colors duration-200'
+								>
+									Login
+								</button>
+								<button
+									onClick={openSignup}
+									className='w-full text-left header-link text-white bg-amber-500 hover:bg-amber-600 block px-3 py-3 rounded-md text-lg font-medium transition-colors duration-200 mt-2 shadow'
+								>
+									Sign Up
+								</button>
+							</>
+						)}
+					</div>
 				</div>
 			</div>
 
+			<LoginModal
+				isOpen={isLoginOpen}
+				onClose={closeLogin}
+				onSwitchToSignup={switchToSignup}
+			/>
+			<SignupModal
+				isOpen={isSignupOpen}
+				onClose={closeSignup}
+				onSwitchToLogin={switchToLogin}
+			/>
 		</div>
 	)
 }

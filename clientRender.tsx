@@ -3,13 +3,13 @@ import { hydrateRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 
 import AppRoutes from './src/routes/index';
-import { CartProvider } from './src/context/CartContext';
+import AppWrapper from './src/AppWrapper';
 
 hydrateRoot(
 	document.getElementById("root") as HTMLElement,
 	<BrowserRouter>
-		<CartProvider>
+		<AppWrapper>
 			<AppRoutes />
-		</CartProvider>
+		</AppWrapper>
 	</BrowserRouter>
 );

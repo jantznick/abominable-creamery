@@ -2,3 +2,7 @@ node_modules
 built/*
 public/css/*
 public/js/*
+
+.env
+
+.cursor*

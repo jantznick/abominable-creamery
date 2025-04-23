@@ -14,6 +14,8 @@ import { News } from '../pages/News';
 import { NotFound } from '../pages/NotFound';
 import { Search } from '../pages/Search';
 import { NewsArticlePage } from '../pages/NewsArticlePage';
+import { Checkout } from '../pages/Checkout';
+import { OrderConfirmation } from '../pages/OrderConfirmation';
 
 import { Header } from '../components/header/Header';
 import { Footer } from '../components/footer/Footer';
@@ -34,6 +36,8 @@ const AppRoutes: React.FC = () => {
 					<Route path="/stores" element={<Stores />} />
 					<Route path="/story" element={<Story />} />
 					<Route path="/cart" element={<Cart />} />
+					<Route path="/checkout" element={<Checkout />} />
+					<Route path="/order-confirmation" element={<OrderConfirmation />} />
 					<Route path="/contact" element={<Contact />} />
 					<Route path="/news" element={<News />} />
 					<Route path="/news/:slug" element={<NewsArticlePage />} />

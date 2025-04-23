@@ -2,17 +2,20 @@ import React, { useState } from 'react'
 import classNames from 'classnames';
 import { Link, useNavigate } from 'react-router-dom';
 
-import { header } from '../../utils/content'
+import { header, siteData } from '../../utils/content'
 import { useCart } from '../../context/CartContext';
+import { CartHoverCard } from './CartHoverCard';
 
 export const Header = () => {
 	const [toggleSearch, setToggleSearch] = useState(false);
 	const [searchTerm, setSearchTerm] = useState('');
 	const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+	const [isCartHovered, setIsCartHovered] = useState(false);
 	const navigate = useNavigate();
-	const { getItemCount } = useCart();
+	const { items, getCartTotal, getItemCount } = useCart();
 
 	const itemCount = getItemCount();
+	const cartTotal = getCartTotal();
 
 	const handleSearch = () => {
 		setToggleSearch(false)
@@ -32,8 +35,18 @@ export const Header = () => {
 			className='relative flex justify-between items-center mt-3 p-4 md:p-5 lg:p-6 mx-2 md:mx-4 shadow-lg rounded-xl bg-gradient-to-b from-indigo-700 to-indigo-800'
 		>
 			<div className="flex items-center space-x-4 md:space-x-6 lg:space-x-8">
-				<Link to="/" className="flex-shrink-0 flex items-center">
-					<img className="w-10 h-10 md:w-11 md:h-11" src="/images/logo.png" alt="Logo"></img>
+				<Link 
+					to="/" 
+					className="flex-shrink-0 flex items-center space-x-3 opacity-90 hover:opacity-100 transition-opacity"
+				>
+					<img 
+						className="w-10 h-10 md:w-11 md:h-11" 
+						src="/images/logo-white.png" 
+						alt="Abominable Creamery Logo"
+					/>
+					<span className="text-3xl font-bold text-white">
+						{siteData.name.toUpperCase()}
+					</span>
 				</Link>
 				<div className='hidden md:flex items-center space-x-3 lg:space-x-4'>
 					{header.links.filter(link => link.active).map((link, i) =>
@@ -79,14 +92,28 @@ export const Header = () => {
 				</span>
 				
 				{header.shoppingActive && (
-					<Link to="/cart" className="relative text-3xl hover:cursor-pointer material-symbols-outlined text-indigo-100 hover:text-white transition-colors duration-200">
-						shopping_cart
-						{itemCount > 0 && (
-							<span className="absolute -top-1 -right-2 flex items-center justify-center w-5 h-5 bg-amber-400 text-indigo-900 text-xs font-bold rounded-full">
-								{itemCount}
-							</span>
+					<div 
+						className="relative"
+						onMouseEnter={() => setIsCartHovered(true)}
+						onMouseLeave={() => setIsCartHovered(false)}
+					>
+						<Link 
+							to="/cart" 
+							className="relative text-3xl hover:cursor-pointer material-symbols-outlined text-indigo-100 hover:text-white transition-colors duration-200 flex items-center justify-center"
+							aria-label={`Shopping cart with ${itemCount} items`}
+						>
+							shopping_cart
+							{itemCount > 0 && (
+								<span className="absolute -top-1 -right-2 flex items-center justify-center w-5 h-5 bg-amber-400 text-indigo-900 text-xs font-bold rounded-full">
+									{itemCount}
+								</span>
+							)}
+						</Link>
+
+						{isCartHovered && (
+							<CartHoverCard items={items} total={cartTotal} itemCount={itemCount} />
 						)}
-					</Link>
+					</div>
 				)}
 
 				<div className="md:hidden flex items-center">

@@ -1,4 +1,5 @@
 const webpack = require('webpack');
+require('dotenv').config(); // Load .env file
 
 const use = {
 	test: /\.(tsx|ts)$/,
@@ -28,7 +29,15 @@ const browserConfig = {
 	resolve: {
 		extensions: ['.*', '.tsx', '.ts'],
 	},
-	mode: "development"
+	mode: "development",
+	plugins: [
+		new webpack.DefinePlugin({
+			// Define process.env variables for client-side code
+			'process.env.STRIPE_PUBLISHABLE_KEY': JSON.stringify(process.env.STRIPE_PUBLISHABLE_KEY)
+			// Add other variables here if needed, e.g.:
+			// 'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development') 
+		})
+	]
 };
 
 const serverConfig = {

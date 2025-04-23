@@ -113,9 +113,12 @@ export const Cart = () => {
 								<span>${total.toFixed(2)}</span>
 							</div>
 						</div>
-						<button className="mt-8 w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out">
+						<Link 
+							to="/checkout"
+							className="block w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white text-center font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out"
+						>
 							Proceed to Checkout
-						</button>
+						</Link>
 					</div>
 				</div>
 			)}

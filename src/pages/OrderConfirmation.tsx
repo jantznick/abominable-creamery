@@ -8,8 +8,10 @@ import { useCart } from '../context/CartContext';
 
 // Interface for the data expected from sessionStorage
 // Should match the CheckoutData interface defined in Checkout.tsx
+// --- Updated interface (matching Checkout.tsx and backend expectations) ---
 interface CheckoutDataForConfirmation {
     items: { 
+        // Expect productId, as saved by Checkout.tsx and expected by backend
         productId: string; 
         productName: string; 
         quantity: number;

@@ -11,6 +11,9 @@ import authRouter from './src/server/routes/auth';
 import orderRouter from './src/server/routes/orders';
 import stripeRouter from './src/server/routes/stripe';
 import { AuthProvider } from './src/context/AuthContext';
+import { ProductProvider } from './src/context/ProductContext';
+import { getStripeProducts } from './src/server/utils/stripeProducts';
+import { Flavor } from './src/types/flavor';
 
 import AppRoutes from './src/routes/index';
 import AppWrapper from './src/AppWrapper';
@@ -67,53 +70,125 @@ app.use('/api/auth', authRouter);
 app.use('/api/orders', orderRouter);
 app.use('/api/stripe', stripeRouter);
 
+// Define the expected structure for items in the request body
+interface CartItemPayload {
+	priceId: string;
+	quantity: number;
+}
+
+// Update the payment intent endpoint
 app.post('/create-payment-intent', async (req: Request, res: Response) => {
 	if (!stripe) {
 		return res.status(500).send({ error: 'Stripe is not configured.' });
 	}
 
-	const { amount } = req.body;
+	// Expect an array of items with priceId and quantity
+	const { items } = req.body as { items: CartItemPayload[] }; 
 
-	if (!amount || typeof amount !== 'number' || amount <= 0) {
-		return res.status(400).send({ error: 'Invalid amount specified.' });
+	if (!items || !Array.isArray(items) || items.length === 0) {
+		return res.status(400).send({ error: 'Invalid or empty items array provided.' });
 	}
 
+	let totalAmount = 0;
+	const lineItemsForVerification: { price: string; quantity: number }[] = []; // Optional: Store details for potential order creation
+
 	try {
+		// Validate items and calculate total amount server-side
+		for (const item of items) {
+			if (!item.priceId || typeof item.priceId !== 'string' || 
+			    !item.quantity || typeof item.quantity !== 'number' || item.quantity <= 0) {
+				console.warn("Invalid item structure received:", item);
+				return res.status(400).send({ error: `Invalid item data for priceId: ${item.priceId}` });
+			}
+
+			// Retrieve the price object from Stripe to ensure price integrity
+			const price = await stripe.prices.retrieve(item.priceId);
+
+			if (!price || !price.active) {
+				console.warn(`Price ID ${item.priceId} not found or inactive.`);
+				return res.status(400).send({ error: `Invalid or inactive price ID: ${item.priceId}` });
+			}
+
+			if (!price.unit_amount) {
+				console.warn(`Price ID ${item.priceId} has no unit amount.`);
+                return res.status(400).send({ error: `Price ID ${item.priceId} is not valid for purchase.` });
+			}
+
+			// TODO: Add currency check if necessary (e.g., if you support multiple currencies)
+			// if (price.currency !== 'usd') { ... }
+
+			totalAmount += price.unit_amount * item.quantity;
+			lineItemsForVerification.push({ price: item.priceId, quantity: item.quantity });
+		}
+
+		if (totalAmount <= 0) {
+			return res.status(400).send({ error: 'Calculated total amount must be positive.' });
+		}
+
+		// Create the PaymentIntent with the server-calculated amount
 		const paymentIntent = await stripe.paymentIntents.create({
-			amount: amount,
-			currency: 'usd',
+			amount: totalAmount, // Use server-calculated amount
+			currency: 'usd', // Assuming USD, fetch from first validated price if needed
 			automatic_payment_methods: {
 				enabled: true,
 			},
+			// Optional: Add metadata to link PaymentIntent to potential order later
+			metadata: {
+				// Store cart items here if needed for webhook processing or order creation
+				// e.g., cartItems: JSON.stringify(lineItemsForVerification)
+			}
 		});
 
 		res.send({
 			clientSecret: paymentIntent.client_secret,
 		});
+
 	} catch (error: any) {
-		console.error("Error creating payment intent:", error);
-		res.status(500).send({ error: error.message });
+		console.error("Error processing payment intent:", error);
+		if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
+			return res.status(400).send({ error: `Invalid Price ID found in request.` });
+		}
+		res.status(500).send({ error: 'Internal server error creating payment intent.' });
 	}
 });
 
-app.get('*', (req: Request, res: Response) => {
+app.get('*', async (req: Request, res: Response) => {
+	if (!stripe) {
+		console.error("SSR Error: Stripe is not initialized.");
+		return res.status(500).send("Server configuration error.");
+	}
+
+	let flavorsData: Flavor[] = [];
+	try {
+		flavorsData = await getStripeProducts(stripe);
+	} catch (error) {
+		console.error("SSR Error fetching products:", error);
+	}
+
+	const initialDataScript = `<script>window.__INITIAL_DATA__ = ${JSON.stringify({ flavors: flavorsData }).replace(/</g, '\\u003c')}</script>`;
+
+	const appHtml = renderToString(
+		<StaticRouter location={req.url}>
+			<ProductProvider initialFlavors={flavorsData}>
+				<AppWrapper>
+					<AppRoutes />
+				</AppWrapper>
+			</ProductProvider>
+		</StaticRouter>
+	);
+
 	res.send(`<!DOCTYPE html>
-	<head>
-		<title>${siteData.name} - ${siteData.tagline}</title>
-		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<link href="/css/style.css" rel="stylesheet">
-		<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
-	</head>
-	<body>
-		<div id="root" class="min-h-screen flex-col flex">${renderToString(
-		<StaticRouter location={req.url} >
-			<AppWrapper>
-				<AppRoutes />
-			</AppWrapper>
-		</StaticRouter>)}
-		</div>
-		<script src="/js/bundle.js" defer></script>
-	</body>
+<head>
+	<title>${siteData.name} - ${siteData.tagline}</title>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<link href="/css/style.css" rel="stylesheet">
+	<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+	${initialDataScript}
+</head>
+<body>
+	<div id="root" class="min-h-screen flex-col flex">${appHtml}</div>
+	<script src="/js/bundle.js" defer></script>
+</body>
 </html>
 	`);
 });

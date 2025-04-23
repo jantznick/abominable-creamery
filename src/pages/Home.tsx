@@ -1,11 +1,15 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
+import { useProducts } from '../context/ProductContext'; // Import the hook
 
-import { siteData, flavors } from '../utils/content'
+// import { siteData, flavors as staticFlavors } from '../utils/content' // Remove static import
+import { siteData } from '../utils/content' // Keep siteData import
 import { MiniFlavorCard } from '../components/MiniFlavorCard'
 
 export const Home = () => {
-	// Select first 4 flavors as featured
+	const { flavors } = useProducts(); // Get flavors from context
+
+	// Select first 4 flavors from context as featured
 	const featuredFlavors = flavors.slice(0, 4);
 
 	return (
@@ -42,9 +46,15 @@ export const Home = () => {
 						Our Most Legendary Flavors
 					</h2>
 					<div className='flex flex-wrap justify-center gap-4 md:gap-6 lg:gap-9'>
-						{featuredFlavors.map((flavor, i) => (
-							<MiniFlavorCard flavor={flavor} key={i} />
-						))}
+						{/* Map over featured flavors from context */} 
+						{featuredFlavors.length > 0 ? (
+							featuredFlavors.map((flavor) => (
+								// Use flavor.id (Stripe Product ID) as the key
+								<MiniFlavorCard flavor={flavor} key={flavor.id} />
+							))
+						) : (
+							<p className="text-center text-gray-500">Loading featured flavors...</p>
+						)}
 					</div>
 					<div className="text-center mt-12 md:mt-16">
 						<Link

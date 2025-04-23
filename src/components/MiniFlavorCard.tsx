@@ -1,19 +1,13 @@
 import React from 'react'
 import { Link } from 'react-router-dom'
+import { Flavor } from '../types/flavor' // Import the correct Flavor type
 
-// Define an interface for the flavor prop
-interface FlavorData {
-	id: string;
-	name: string;
-	simpleName?: string; // Optional based on usage
-	description?: string; // Optional based on usage
-	imageSrc?: string; // Optional based on usage
-	price?: string;
-}
+// Remove the outdated local interface
+// interface FlavorData { ... }
 
-// Define props type for the component
+// Update props to use the imported Flavor type
 interface MiniFlavorCardProps {
-	flavor: FlavorData;
+	flavor: Flavor;
 }
 
 export const MiniFlavorCard: React.FC<MiniFlavorCardProps> = ({flavor}) => {
@@ -26,6 +20,11 @@ export const MiniFlavorCard: React.FC<MiniFlavorCardProps> = ({flavor}) => {
 		2: 'blue'
 	};
 
+	// Find the default price or the first price if none is default (e.g., single pint price)
+	// For simplicity, let's just take the first price for display here.
+	// A more robust approach might involve sorting or checking metadata.
+	const displayPrice = flavor.prices.length > 0 ? flavor.prices[0] : null;
+
 	return (
 		<Link
 			to={`/flavors/${flavor.id}`}
@@ -34,7 +33,8 @@ export const MiniFlavorCard: React.FC<MiniFlavorCardProps> = ({flavor}) => {
 			<div className='aspect-square overflow-hidden'>
 				<img
 					className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-					src={flavor.imageSrc || `/images/${colors[randomNumber]}-soon.png`}
+					// Use flavor.imageSrc which comes from Stripe now
+					src={flavor.imageSrc || `/images/${colors[randomNumber]}-soon.png`} 
 					alt={flavor.name}
 				/>
 			</div>
@@ -43,11 +43,20 @@ export const MiniFlavorCard: React.FC<MiniFlavorCardProps> = ({flavor}) => {
 				<h3 className='font-semibold text-lg text-slate-800 group-hover:text-indigo-600 transition-colors duration-200 leading-tight'>{flavor.name}</h3>
 				{flavor.simpleName && <p className='text-sm text-slate-500 mb-2'>{flavor.simpleName}</p>}
 				
-				<p className='text-sm text-slate-600 line-clamp-3 mb-3 flex-grow'>{flavor.description}</p>
+				{/* Handle potentially null description */} 
+				<p className='text-sm text-slate-600 line-clamp-3 mb-3 flex-grow'>{flavor.description || 'No description available.'}</p> 
 
-				{flavor.price && (
-					<p className="font-semibold text-lg text-amber-600 mt-auto pt-2">${flavor.price}</p>
-				)}
+				{/* Display the price options */}
+				<div className="mt-auto pt-2">
+					{flavor.prices.map(priceOpt => (
+						<p key={priceOpt.priceId} className="font-semibold text-md text-amber-600">
+							${priceOpt.price} {priceOpt.unitDescription ? `(${priceOpt.unitDescription})` : ''}
+						</p>
+					))}
+					{flavor.prices.length === 0 && (
+						<p className="font-semibold text-md text-red-600">Not available</p>
+					)}
+				</div>
 			</div>
 		</Link>
 	)

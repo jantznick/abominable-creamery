@@ -14,24 +14,32 @@ const CartItemRow: React.FC<CartItemRowProps> = ({ item }) => {
 	const handleQuantity = (amount: number) => {
 		// Update quantity using context function, ensure quantity >= 1
 		const newQuantity = Math.max(1, item.quantity + amount);
-		updateQuantity(item.id, newQuantity);
+		// Use priceId now for updating
+		updateQuantity(item.priceId, newQuantity); 
 	};
 
 	const handleRemove = () => {
-		removeItem(item.id);
+		// Use priceId now for removing
+		removeItem(item.priceId); 
 	};
 
 	// Default image logic (can be refined)
 	const imageToDisplay = item.imageSrc || `/images/blue-soon.png`;
+
+	// Parse price string for calculations
+	const priceAsNumber = parseFloat(item.price);
+	const isValidPrice = !isNaN(priceAsNumber);
+	const itemTotal = isValidPrice ? (priceAsNumber * item.quantity).toFixed(2) : 'Invalid Price';
 
 	return (
 		<div className="flex items-center justify-between py-4 border-b border-slate-200 flex-wrap md:flex-nowrap last:border-b-0">
 			<div className="flex items-center space-x-4 w-full md:w-1/2 mb-4 md:mb-0">
 				<img src={imageToDisplay} alt={item.name} className="w-16 h-16 object-cover rounded-md shadow-sm" />
 				<div>
-					{/* Link to the flavor page */}
-					<Link to={`/flavors/${item.id}`} className="font-semibold text-lg text-slate-800 hover:text-indigo-600 transition-colors duration-200">{item.name}</Link>
-					<p className="text-sm text-slate-500">${item.price.toFixed(2)} each</p>
+					{/* Link to the main product/flavor page using productId */}
+					<Link to={`/flavors/${item.productId}`} className="font-semibold text-lg text-slate-800 hover:text-indigo-600 transition-colors duration-200">{item.name}</Link>
+					{/* Display the price string directly */}
+					<p className="text-sm text-slate-500">${item.price} each</p> 
 					<button onClick={handleRemove} className="text-xs text-red-500 hover:text-red-700 mt-1 transition-colors duration-200">Remove</button>
 				</div>
 			</div>
@@ -42,9 +50,9 @@ const CartItemRow: React.FC<CartItemRowProps> = ({ item }) => {
 					<input type="number" value={item.quantity} readOnly className="w-12 text-center border-l border-r border-slate-300 py-1 focus:outline-none" />
 					<button onClick={() => handleQuantity(1)} className="px-3 py-1 text-slate-600 hover:bg-slate-100 transition-colors duration-200">+</button>
 				</div>
-				{/* Item Total */}
-				<p className="font-semibold text-lg text-slate-800 ml-6 w-20 text-right">
-					${(item.price * item.quantity).toFixed(2)}
+				{/* Item Total - Use calculated total */}
+				<p className="font-semibold text-lg text-slate-800 ml-6 w-24 text-right">
+					${itemTotal}
 				</p>
 			</div>
 		</div>
@@ -81,7 +89,8 @@ export const Cart = () => {
 					<div className="lg:col-span-2 bg-white p-6 rounded-lg shadow-md border border-slate-200">
 						{items.map(item => (
 							<CartItemRow
-								key={item.id}
+								// Use priceId for the key now
+								key={item.priceId} 
 								item={item}
 							/>
 						))}

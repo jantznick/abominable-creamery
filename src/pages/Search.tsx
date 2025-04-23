@@ -1,19 +1,17 @@
 import React from 'react'
 import { useLocation, Link } from 'react-router-dom'
 import fuzzysort from 'fuzzysort'
-
-import { flavors } from '../utils/content';
+import { useProducts } from '../context/ProductContext';
 import { MiniFlavorCard } from '../components/MiniFlavorCard';
 
 export const Search = () => {
+	const { flavors } = useProducts();
 	const searchFlavor = new URLSearchParams(useLocation().search).get('flavor');
 
-	// Handle null search term and ensure type safety for fuzzysort
 	const searchTerm = searchFlavor ?? '';
 	const searchResults = fuzzysort.go(searchTerm, flavors, {
 		keys: ['name', 'simpleName', 'description'],
-		all: true,
-		threshold: 0.2
+		threshold: -10000
 	})
 
 	return (
@@ -25,8 +23,8 @@ export const Search = () => {
 
 			<div className='px-4 md:px-8 lg:px-16 max-w-7xl mx-auto flex flex-wrap justify-center gap-4 md:gap-8 pb-8'>
 				{searchResults.length > 0 ? (
-					searchResults.map((result, i) =>
-						<MiniFlavorCard flavor={result.obj} key={i} />
+					searchResults.map((result) =>
+						<MiniFlavorCard flavor={result.obj} key={result.obj.id} />
 					)
 				) : (
 					<p className="text-center text-gray-600 col-span-full py-12">No flavors found matching your search.</p>

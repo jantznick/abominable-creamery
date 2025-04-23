@@ -163,4 +163,27 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 5.  Run Prisma migrations: `npx prisma migrate dev` (Creates DB if needed, applies migrations)
 6.  **(Optional) Seed Database:** `npx prisma db seed` (if seed script is configured).
 7.  Start the development server: `npm start`
-8.  Access the application at `http://localhost:3000`. 
+8.  Access the application at `http://localhost:3000`.
+
+## 7. Stripe Product Integration
+
+### 7.1 Overview
+
+Instead of relying on a static list of products defined in `src/utils/content.ts`, the application fetches product information directly from Stripe. This allows for dynamic updating of product details, pricing, and availability via the Stripe Dashboard without requiring code changes and deployments.
+
+### 7.2 Data Flow
+
+1.  **Stripe Setup:** Ice cream flavors are configured as `Product` objects in the Stripe Dashboard. Each product has associated metadata (e.g., `simpleName`, `hasDairy`, `hasEgg`), images, and a default `Price` object. Products must be marked as "Active".
+2.  **Server-Side Fetching:** During the Server-Side Rendering (SSR) process in `serverRender.tsx`, a utility function (`src/server/utils/stripeProducts.ts` - TBC) uses the Stripe Node.js library (`stripe.products.list`) with the `STRIPE_SECRET_KEY` to fetch all active products and their default prices.
+3.  **Data Transformation:** The fetched Stripe data is transformed into the application's internal `Flavor` data structure.
+4.  **SSR Injection:** The transformed product list is passed down to the React application during server rendering, likely via props or a dedicated `ProductContext`.
+5.  **Frontend Consumption:** Frontend components (e.g., `Flavors.tsx`, `ProductDetail.tsx`) access the product data through props or the context provider, eliminating the need for client-side fetching for initial display.
+6.  **Cart & Checkout:** The `CartContext` stores items using Stripe Price IDs. The `/create-payment-intent` backend endpoint verifies prices using the Stripe API based on the Price IDs provided from the cart, ensuring accurate payment amounts.
+
+### 7.3 Key Implementation Points
+
+*   **Server Utility:** A dedicated module handles fetching and mapping Stripe products (`src/server/utils/stripeProducts.ts` - TBC).
+*   **SSR Integration:** Logic within `serverRender.tsx` orchestrates the fetching and injection of product data.
+*   **Frontend Adaptation:** Components are refactored to consume data via props/context instead of static import.
+*   **Stripe Metadata:** Consistency between the application's data needs and the metadata fields defined in Stripe Products is crucial.
+*   **Price Management:** Pricing is managed directly via Stripe `Price` objects. The application uses Price IDs for cart and checkout operations. 

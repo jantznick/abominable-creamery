@@ -28,13 +28,12 @@ const FormInput = ({ label, id, ...props }: { label: string; id: string; [key: s
 
 // Define expected structure for checkout data to be saved
 interface CheckoutData {
-    items: { 
-        // TODO: Verify CartItem type includes productId and name
-        // Assuming CartItem has id, name, quantity, price for now
-        productId: string; // Assuming productId is string based on OrderItem schema
-        productName: string; 
+    items: {
+        // Use productId to match backend OrderItemSchema
+        productId: string; 
+        productName: string; // This is CartItem.name (which includes pack description)
         quantity: number;
-        price: number; // Assuming price is in dollars (as per OrderItem schema needs)
+        price: number; // Store as number for order schema
     }[];
     totalAmount: number; // Total in dollars
     shippingAddress: { // Mirroring AddressSchema in orders.ts
@@ -200,14 +199,28 @@ export const Checkout = () => {
 
     // Effect to fetch Payment Intent client secret
     useEffect(() => {
-        if (activeSection === 'payment' && !clientSecret && isShippingComplete && items.length > 0 && totalInCents > 0) {
+        // Ensure cart items are available from context
+        // This payload is for /create-payment-intent, which needs priceId!
+        const cartItemsForPayload = items.map(item => ({
+            priceId: item.priceId, // Correct: Use priceId here
+            quantity: item.quantity
+        }));
+
+        if (
+            activeSection === 'payment' && 
+            !clientSecret && 
+            isShippingComplete && 
+            cartItemsForPayload.length > 0
+            // No need to check totalInCents > 0 here, backend calculates total
+        ) {
             setIsLoadingSecret(true);
             setErrorLoadingSecret(null);
-            console.log("Fetching Payment Intent for amount:", totalInCents);
+            console.log("Fetching Payment Intent for items:", cartItemsForPayload);
             fetch('/create-payment-intent', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ amount: totalInCents }),
+                // Send the items array instead of the calculated amount
+                body: JSON.stringify({ items: cartItemsForPayload }), 
             })
             .then(res => {
                 if (!res.ok) {
@@ -230,8 +243,8 @@ export const Checkout = () => {
             .finally(() => {
                 setIsLoadingSecret(false);
             });
-        } else if (activeSection === 'payment' && totalInCents <= 0) {
-             setErrorLoadingSecret('Cannot process order with zero total.');
+        } else if (activeSection === 'payment' && cartItemsForPayload.length === 0) {
+             setErrorLoadingSecret('Your cart is empty. Cannot initialize payment.');
              setIsLoadingSecret(false);
         } else if (activeSection !== 'payment') {
             // Reset payment state if navigating away from payment section
@@ -239,7 +252,9 @@ export const Checkout = () => {
              setIsLoadingSecret(false);
              setErrorLoadingSecret(null);
         }
-    }, [activeSection, isShippingComplete, items, totalInCents, clientSecret]);
+        // Dependencies: Add items directly if CartContext guarantees stable reference, 
+        // otherwise, consider stringifying items or using itemCount for dependency array
+    }, [activeSection, isShippingComplete, items, clientSecret]); // Added items
 
     // Stripe Elements options
     const appearance = { theme: 'stripe' as const };
@@ -278,20 +293,59 @@ export const Checkout = () => {
         }
     };
 
-    // Helper to render Section Header
+    // Prepare checkout data for sessionStorage (used by StripeCheckoutForm)
+    // This needs to be created *outside* the StripeCheckoutForm component
+    // so it's available when StripeCheckoutForm mounts/renders
+    const preparedCheckoutData: CheckoutData | null = useMemo(() => {
+        // Only prepare if contact and shipping are complete
+        if (!isContactComplete || !isShippingComplete) return null;
+        
+        try {
+            const mappedItems = items.map(item => {
+                const priceAsNumber = parseFloat(item.price);
+                if (isNaN(priceAsNumber)) {
+                    console.error(`Invalid price format in cart item: ${item.productId}, ${item.price}`);
+                    throw new Error("Invalid item price found in cart."); // Throw to prevent bad data
+                }
+                return {
+                    // Map productId for the backend OrderItem schema
+                    productId: item.productId, 
+                    productName: item.name, 
+                    quantity: item.quantity,
+                    price: priceAsNumber // Store as number
+                };
+            });
+
+            return {
+                items: mappedItems,
+                totalAmount: totalInDollars, // Use previously calculated total
+                shippingAddress: {
+                    fullName,
+                    address1,
+                    address2,
+                    city,
+                    state,
+                    postalCode,
+                    country,
+                },
+                contactInfo: {
+                    email,
+                    phone,
+                }
+            };
+        } catch (error) {
+            console.error("Error preparing checkout data:", error);
+            // Maybe set an error state to display to the user?
+            return null; // Return null if data preparation fails
+        }
+    }, [items, isContactComplete, isShippingComplete, totalInDollars, fullName, address1, address2, city, state, postalCode, country, email, phone]);
+
     const renderSectionHeader = (section: CheckoutSection, title: string, isComplete: boolean) => (
-        <div className="flex justify-between items-center pb-3 mb-6 border-b border-slate-200">
-            <h2 className={classNames(
-                    "text-2xl font-semibold", 
-                    activeSection === section ? 'text-slate-800' : 'text-slate-500'
-                )}
-            >
-                {title}
-            </h2>
-            {isComplete && activeSection !== section && section !== 'auth_choice' && (
+        <div className="flex justify-between items-center mb-4">
+            <h2 className={`text-xl font-semibold ${isComplete && activeSection !== section ? 'text-slate-600' : 'text-slate-800'}`}>{title}</h2>
+            {isComplete && activeSection !== section && (
                 <button 
-                    type="button" 
-                    onClick={() => handleEditSection(section)}
+                    onClick={() => handleEditSection(section)} 
                     className="text-sm text-indigo-600 hover:underline"
                 >
                     Edit
@@ -412,35 +466,16 @@ export const Checkout = () => {
                                 <div>
                                     {isLoadingSecret && <p className="text-center text-slate-500"><div className="spinner border-t-2 border-indigo-500 border-solid rounded-full w-5 h-5 animate-spin mx-auto mb-2"></div>Initializing payment...</p>}
                                     {errorLoadingSecret && <p className="text-center text-red-600">{errorLoadingSecret}</p>}
-                                    {clientSecret && stripePromise && options && (
+                                    {clientSecret && stripePromise && options && preparedCheckoutData && (
                                         <Elements options={options} stripe={stripePromise}>
                                             <StripeCheckoutForm 
                                                 clientSecret={clientSecret} 
-                                                checkoutData={{
-                                                    items: items.map(item => ({
-                                                        // TODO: Ensure CartItem has productId and correct name field
-                                                        productId: item.id, // Assuming item.id corresponds to productId (string)
-                                                        productName: item.name, // Assuming item.name exists
-                                                        quantity: item.quantity,
-                                                        price: item.price // Assuming item.price is in dollars
-                                                    })),
-                                                    totalAmount: totalInDollars, // Pass total in dollars
-                                                    shippingAddress: {
-                                                        fullName,
-                                                        address1,
-                                                        address2,
-                                                        city,
-                                                        state,
-                                                        postalCode,
-                                                        country,
-                                                    },
-                                                    contactInfo: {
-                                                        email,
-                                                        phone,
-                                                    }
-                                                }}
+                                                checkoutData={preparedCheckoutData}
                                             />
                                         </Elements>
+                                    )}
+                                    {activeSection === 'payment' && isShippingComplete && !preparedCheckoutData && !isLoadingSecret && !errorLoadingSecret && (
+                                        <p className="text-center text-red-600">There was an error preparing your order data. Please review your cart or contact support.</p>
                                     )}
                                 </div>
                             )}
@@ -456,12 +491,16 @@ export const Checkout = () => {
                         
                         {/* Cart Items Mini View */}
                         <div className="space-y-4 mb-6 max-h-60 overflow-y-auto">
-                            {items.map((item) => (
-                                <div key={item.id} className="flex justify-between items-center text-sm">
-                                    <span className="flex-1 mr-2">{item.name} ({item.quantity})</span>
-                                    <span className="text-slate-700 font-medium">${(item.price * item.quantity).toFixed(2)}</span>
-                                </div>
-                            ))}
+                            {items.map((item) => {
+                                const itemPrice = parseFloat(item.price);
+                                const itemTotal = !isNaN(itemPrice) ? (itemPrice * item.quantity).toFixed(2) : 'Invalid';
+                                return (
+                                    <div key={item.productId} className="flex justify-between items-center text-sm">
+                                        <span className="flex-1 mr-2">{item.name} ({item.quantity})</span>
+                                        <span className="text-slate-700 font-medium">${itemTotal}</span>
+                                    </div>
+                                );
+                            })}
                             {items.length === 0 && <p className="text-slate-500 text-sm text-center">(Your cart is empty)</p>}
                         </div>
 

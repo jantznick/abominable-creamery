@@ -68,7 +68,7 @@ export const footerColumns = [
 
 export const siteData = {
 	name: 'Abominable Creamery',
-	tagline: 'Taste it to believe it'
+	tagline: 'Taste it to believe'
 }
 
 export const flavors = [

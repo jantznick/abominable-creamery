@@ -2,64 +2,77 @@ import React, { createContext, useState, useContext, ReactNode, useMemo, useEffe
 
 // --- Types ---
 
+// Updated CartItem type to include productId
 export interface CartItem {
-    id: string;         // Unique identifier for the item (e.g., flavor id)
-    name: string;       // Name of the item
-    price: number;      // Price per unit
+    priceId: string;    // Stripe Price ID (unique identifier for the cart item)
+    productId: string;  // Stripe Product ID (for linking back to product page)
+    name: string;       // Name of the item (including pack description, e.g., "Vanilla (Pint)")
+    price: string;      // Price per unit (string format, e.g., "5.99")
     quantity: number;   // Number of units in the cart
-    imageSrc?: string;  // Optional image source
+    imageSrc?: string;  // Optional image source (product image)
+}
+
+// Update payload to include productId
+export interface AddItemPayload {
+    priceId: string;
+    productId: string;
+    name: string;
+    price: string; 
+    imageSrc?: string;
 }
 
 interface CartContextState {
     items: CartItem[];
-    addItem: (item: Omit<CartItem, 'quantity'>, quantity?: number) => void;
-    removeItem: (itemId: string) => void;
-    updateQuantity: (itemId: string, quantity: number) => void;
+    addItem: (itemToAdd: AddItemPayload, quantity?: number) => void;
+    removeItem: (priceId: string) => void; // Use priceId
+    updateQuantity: (priceId: string, quantity: number) => void; // Use priceId
     clearCart: () => void;
     getCartTotal: () => number;
     getItemCount: () => number;
 }
 
 // --- Constants ---
-const LOCAL_STORAGE_KEY = 'abominableCreameryCartItems';
+const LOCAL_STORAGE_KEY = 'abominableCreameryCartItems_v3'; // Update key again
 
 // --- Context ---
-
-// Create context with a default value (can be undefined or a default state)
 const CartContext = createContext<CartContextState | undefined>(undefined);
 
 // --- Helper Function to safely get initial state ---
 const getInitialState = (): CartItem[] => {
-    // Check if running on client side
     if (typeof window !== 'undefined' && window.localStorage) {
         try {
             const storedItems = window.localStorage.getItem(LOCAL_STORAGE_KEY);
             if (storedItems) {
-                // TODO: Add validation here later if needed
-                return JSON.parse(storedItems);
+                const parsedItems = JSON.parse(storedItems);
+                // Update validation to check for productId too
+                if (Array.isArray(parsedItems) && parsedItems.every(item => 
+                    item && 
+                    typeof item.priceId === 'string' &&
+                    typeof item.productId === 'string' // Check productId
+                )) {
+                    return parsedItems;
+                }
+                console.warn("Invalid v3 cart data found in localStorage, resetting.");
+                window.localStorage.removeItem(LOCAL_STORAGE_KEY);
             }
         } catch (error) {
-            console.error("Error reading cart items from localStorage:", error);
-            // Optionally clear corrupted storage
+            console.error("Error reading v3 cart items from localStorage:", error);
             // window.localStorage.removeItem(LOCAL_STORAGE_KEY);
         }
     }
-    return []; // Return empty array if server-side or no stored data
+    return []; 
 };
 
 // --- Provider Component ---
-
 interface CartProviderProps {
     children: ReactNode;
 }
 
 export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
-    // Initialize state from localStorage helper function
     const [items, setItems] = useState<CartItem[]>(getInitialState);
 
     // Effect to save state to localStorage whenever items change
     useEffect(() => {
-        // Check if running on client side
         if (typeof window !== 'undefined' && window.localStorage) {
             try {
                 window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(items));
@@ -67,44 +80,51 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
                 console.error("Error saving cart items to localStorage:", error);
             }
         }
-    }, [items]); // Re-run this effect whenever items array changes
+    }, [items]); 
 
-    // Add item to cart (or increment quantity if it exists)
-    const addItem = (itemToAdd: Omit<CartItem, 'quantity'>, quantity: number = 1) => {
+    // Add item to cart (using priceId as identifier, store productId)
+    const addItem = (itemToAdd: AddItemPayload, quantity: number = 1) => {
         setItems(prevItems => {
-            const existingItem = prevItems.find(item => item.id === itemToAdd.id);
+            const existingItem = prevItems.find(item => item.priceId === itemToAdd.priceId);
             if (existingItem) {
-                // Increment quantity
                 return prevItems.map(item =>
-                    item.id === itemToAdd.id
+                    item.priceId === itemToAdd.priceId
                         ? { ...item, quantity: item.quantity + quantity }
                         : item
                 );
             } else {
-                // Add new item
-                return [...prevItems, { ...itemToAdd, quantity }];
+                // Add new item, including productId
+                const newItem: CartItem = {
+                    priceId: itemToAdd.priceId,
+                    productId: itemToAdd.productId, // Store productId
+                    name: itemToAdd.name,
+                    price: itemToAdd.price,
+                    quantity: quantity,
+                    imageSrc: itemToAdd.imageSrc
+                };
+                return [...prevItems, newItem];
             }
         });
-        console.log("Added item:", itemToAdd, "Quantity:", quantity);
+        console.log("Added item (Price ID):", itemToAdd.priceId, "Product ID:", itemToAdd.productId, "Quantity:", quantity);
     };
 
-    // Remove item from cart
-    const removeItem = (itemId: string) => {
-        setItems(prevItems => prevItems.filter(item => item.id !== itemId));
-        console.log("Removed item:", itemId);
+    // Remove item from cart (using priceId)
+    const removeItem = (priceId: string) => {
+        setItems(prevItems => prevItems.filter(item => item.priceId !== priceId));
+        console.log("Removed item (Price ID):", priceId);
     };
 
-    // Update item quantity (remove if quantity <= 0)
-    const updateQuantity = (itemId: string, quantity: number) => {
+    // Update item quantity (using priceId)
+    const updateQuantity = (priceId: string, quantity: number) => {
         if (quantity <= 0) {
-            removeItem(itemId);
+            removeItem(priceId);
         } else {
             setItems(prevItems =>
                 prevItems.map(item =>
-                    item.id === itemId ? { ...item, quantity } : item
+                    item.priceId === priceId ? { ...item, quantity } : item
                 )
             );
-             console.log("Updated quantity for:", itemId, "New Quantity:", quantity);
+             console.log("Updated quantity for (Price ID):", priceId, "New Quantity:", quantity);
         }
     };
 
@@ -114,9 +134,16 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
          console.log("Cart cleared");
     };
 
-    // Calculate total price of items in cart
+    // Calculate total price of items in cart (parsing price string)
     const getCartTotal = useMemo(() => {
-        return () => items.reduce((total, item) => total + item.price * item.quantity, 0);
+        return () => items.reduce((total, item) => {
+            const priceValue = parseFloat(item.price);
+            if (isNaN(priceValue)) {
+                console.error(`Invalid price format for item ${item.priceId}: ${item.price}`);
+                return total; // Skip item if price is invalid
+            }
+            return total + priceValue * item.quantity;
+        }, 0);
     }, [items]);
 
     // Get total number of individual items in the cart
@@ -124,8 +151,7 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
         return () => items.reduce((count, item) => count + item.quantity, 0);
     }, [items]);
 
-
-    // Memoize the context value to prevent unnecessary re-renders
+    // Memoize the context value
      const contextValue = useMemo(() => ({
         items,
         addItem,
@@ -134,8 +160,7 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
         clearCart,
         getCartTotal,
         getItemCount
-    }), [items, getCartTotal, getItemCount]); // Dependencies for useMemo
-
+    }), [items, getCartTotal, getItemCount]);
 
     return (
         <CartContext.Provider value={contextValue}>
@@ -145,8 +170,6 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
 };
 
 // --- Custom Hook ---
-
-// Custom hook to use the CartContext, ensures it's used within a provider
 export const useCart = (): CartContextState => {
     const context = useContext(CartContext);
     if (context === undefined) {

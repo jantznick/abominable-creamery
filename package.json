@@ -9,7 +9,7 @@
 		"build-app": "NODE_ENV=development webpack -w",
 		"build-css": "tailwindcss -i ./src/styles/style.css -o ./public/css/style.css",
 		"build-watch-css": "tailwindcss -i ./src/styles/style.css -o ./public/css/style.css --watch",
-		"build-server-prod": "npm run build-css & NODE_ENV=production webpack"
+		"build-server-prod": "npm run build-css && NODE_ENV=production webpack"
 	},
 	"keywords": [],
 	"author": "",

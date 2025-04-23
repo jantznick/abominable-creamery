@@ -72,7 +72,7 @@ router.post('/signup', checkNotAuthenticated, async (req: Request, res: Response
                 email,
                 passwordHash,
                 name: name || null, // Optional name
-                role: 'USER' // Default role
+                role: email === process.env.ADMIN_EMAIL ? 'ADMIN' : 'USER' // Default role
             },
         });
 

@@ -105,6 +105,7 @@ router.post('/create-payment-intent', async (req: Request, res: Response) => {
 			automatic_payment_methods: {
 				enabled: true,
 			},
+			payment_method_types: ['card', 'apple-pay', 'google-pay', 'cashapp-pay', 'amazon-pay'],
 			metadata: {
 				cart_details: JSON.stringify(lineItemsForVerification) 
 			}

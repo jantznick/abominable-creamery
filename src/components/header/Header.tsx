@@ -144,7 +144,9 @@ export const Header = () => {
 						<span className="text-indigo-100 text-sm">Loading...</span>
 					) : user ? (
 						<>
-							<span className="text-indigo-100 text-sm hidden lg:inline">Hi, {user.name || user.email}</span>
+							<Link to="/profile" className="text-indigo-100 text-sm hidden lg:inline">
+								Hi, {user.name || user.email}
+							</Link>
 							<button
 								onClick={handleLogout}
 								className="header-link text-indigo-100 hover:text-white hover:bg-indigo-600/60 px-3 py-2 rounded-md text-sm lg:text-base font-medium transition-colors duration-200"
@@ -214,6 +216,13 @@ export const Header = () => {
 						) : user ? (
 							<>
 								<span className="text-indigo-100 block px-3 py-3 text-lg font-medium">Hi, {user.name || user.email}</span>
+								<Link
+									to="/profile"
+									className='w-full text-left header-link text-indigo-100 hover:bg-indigo-600/80 hover:text-white block px-3 py-3 rounded-md text-lg font-medium transition-colors duration-200'
+									onClick={() => setIsMobileMenuOpen(false)}
+								>
+									Profile
+								</Link>
 								<button
 									onClick={handleLogout}
 									className='w-full text-left header-link text-indigo-100 hover:bg-indigo-600/80 hover:text-white block px-3 py-3 rounded-md text-lg font-medium transition-colors duration-200'

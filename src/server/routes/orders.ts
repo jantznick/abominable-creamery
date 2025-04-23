@@ -145,17 +145,39 @@ router.post('/', async (req: Request, res: Response) => {
 
 // GET /api/orders/my - Get orders for the currently logged-in user
 router.get('/my', isAuthenticated, async (req: Request, res: Response) => {
-    // User is guaranteed to be authenticated by middleware
     const userId = req.session.user!.id; 
 
     try {
         const userOrders = await prisma.order.findMany({
             where: { userId: userId },
-            include: {
-                items: true, // Include order items
+            select: { // Use select to specify exactly what fields to return
+                id: true,
+                userId: true,
+                contactEmail: true,
+                status: true,
+                totalAmount: true,
+                createdAt: true,
+                // Select shipping address fields
+                shippingName: true,
+                shippingAddress1: true,
+                shippingAddress2: true,
+                shippingCity: true,
+                shippingState: true,
+                shippingPostalCode: true,
+                shippingCountry: true,
+                // Include related items
+                items: {
+                    select: {
+                        id: true,
+                        productId: true,
+                        productName: true,
+                        quantity: true,
+                        price: true,
+                    }
+                }, 
             },
             orderBy: {
-                createdAt: 'desc', // Show newest orders first
+                createdAt: 'desc', 
             },
         });
 
@@ -169,12 +191,35 @@ router.get('/my', isAuthenticated, async (req: Request, res: Response) => {
 
 // GET /api/orders/all - Get all orders (Admin only)
 router.get('/all', isAuthenticated, isAdmin, async (req: Request, res: Response) => {
-    // User is guaranteed to be an admin by middleware
     try {
         const allOrders = await prisma.order.findMany({
-            include: {
-                items: true, // Include order items
-                user: {      // Include basic user info (if relation exists)
+            select: { // Use select to specify exactly what fields to return
+                id: true,
+                userId: true,
+                contactEmail: true,
+                status: true,
+                totalAmount: true,
+                createdAt: true,
+                // Select shipping address fields
+                shippingName: true,
+                shippingAddress1: true,
+                shippingAddress2: true,
+                shippingCity: true,
+                shippingState: true,
+                shippingPostalCode: true,
+                shippingCountry: true,
+                // Include related items
+                items: {
+                    select: {
+                        id: true,
+                        productId: true,
+                        productName: true,
+                        quantity: true,
+                        price: true,
+                    }
+                },
+                // Include related user info
+                user: {      
                     select: {
                         id: true,
                         email: true,
@@ -185,7 +230,7 @@ router.get('/all', isAuthenticated, isAdmin, async (req: Request, res: Response)
             orderBy: {
                 createdAt: 'desc',
             },
-            // TODO: Add pagination later (e.g., using query params skip/take)
+            // TODO: Add pagination later
         });
 
         res.status(200).json(allOrders);
@@ -196,5 +241,52 @@ router.get('/all', isAuthenticated, isAdmin, async (req: Request, res: Response)
     }
 });
 
+// PATCH /api/orders/:orderId/status - Update order status (Admin only)
+router.patch('/:orderId/status', isAuthenticated, isAdmin, async (req: Request, res: Response) => {
+    const { orderId } = req.params;
+    const { status } = req.body; // Expecting { status: "SHIPPED" } or similar
+
+    // Basic validation
+    if (!orderId || !status) {
+        return res.status(400).json({ message: 'Missing order ID or status in request.' });
+    }
+
+    // Validate status value (optional but recommended)
+    const validStatuses = ['PENDING', 'PAID', 'SHIPPED', 'PROCESSING', 'CANCELLED', 'DELIVERED']; // Example statuses
+    if (!validStatuses.includes(status.toUpperCase())) {
+         return res.status(400).json({ message: `Invalid status value. Must be one of: ${validStatuses.join(', ')}` });
+    }
+
+    try {
+        const updatedOrder = await prisma.order.update({
+            where: {
+                id: parseInt(orderId, 10), // Ensure orderId is an integer
+            },
+            data: {
+                status: status.toUpperCase(), // Ensure consistent casing
+            },
+            select: { // Return only essential fields to confirm update
+                id: true,
+                status: true,
+            }
+        });
+
+        console.log(`Admin ${req.session.user?.id} updated order ${orderId} status to ${status.toUpperCase()}`);
+        res.status(200).json(updatedOrder);
+
+    } catch (error) {
+        console.error(`Error updating status for order ${orderId}:`, error);
+        if (error instanceof Prisma.PrismaClientKnownRequestError) {
+            // P2025: Record to update not found.
+            if (error.code === 'P2025') {
+                return res.status(404).json({ message: `Order with ID ${orderId} not found.` });
+            }
+        }
+         if (error instanceof TypeError && error.message.includes('parseInt')) {
+             return res.status(400).json({ message: 'Invalid order ID format.' });
+        }
+        res.status(500).json({ message: 'Internal server error while updating order status.' });
+    }
+});
 
 export default router; 

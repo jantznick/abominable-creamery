@@ -42,8 +42,8 @@ This document outlines the steps to implement user authentication, order persist
     *   ✅ Implement `POST /api/orders` logic in `orders.ts`.
     *   ✅ Integrate order creation API call into `OrderConfirmation.tsx` logic (on successful payment).
     *   ✅ Add cart clearing (`clearCart()`) to `OrderConfirmation.tsx` on successful order creation.
-*   ❌ **19. Create User Profile Page** (Implement actual data fetching/display in `Profile.tsx` for users)
-*   ❌ **20. Create Admin Orders Page** (Implement actual data fetching/display in `Profile.tsx` for admins)
+*   ✅ **19. Create User Profile Page Component** (`UserProfileView.tsx` created and integrated into `Profile.tsx`)
+*   ✅ **20. Create Admin Orders Page Component** (`AdminOrdersView.tsx` created and integrated into `Profile.tsx`)
 
 ## Phase 5: Refinements
 

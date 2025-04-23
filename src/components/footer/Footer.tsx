@@ -1,54 +1,92 @@
 import React from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import { footerColumns } from '../../utils/content'
-import { FooterColumn } from './FooterColumn'
+
+// --- Refactored FooterColumn --- 
+interface FooterLink {
+	text: string;
+	ahref: string;
+}
+interface FooterColumnData {
+	title: string;
+	links: FooterLink[];
+}
+const FooterColumn: React.FC<{ column: FooterColumnData }> = ({ column }) => {
+	return (
+		// Removed mx-4, added text alignment for mobile stack
+		<div className='flex flex-col text-center md:text-left'>
+			<div className="footer-link-title uppercase font-semibold tracking-wider mb-4 text-indigo-200 text-sm">
+				{column.title}
+			</div>
+			<div className="flex flex-col space-y-2">
+				{column.links.map((link, i) => {
+					// Use Link for internal routes, a for external/mailto/tel
+					const isInternal = link.ahref.startsWith('/');
+					const commonClasses = 'text-indigo-100 hover:text-white text-sm transition-colors duration-200';
+					if (isInternal) {
+						return <Link to={link.ahref} key={i} className={commonClasses}>{link.text}</Link>;
+					} else {
+						return <a href={link.ahref} key={i} className={commonClasses} target="_blank" rel="noopener noreferrer">{link.text}</a>;
+					}
+				})}
+			</div>
+		</div>
+	)
+}
+// --- End Refactored FooterColumn --- 
 
 export const Footer = () => {
 
 	const navigate = useNavigate();
 
 	return (
-		<div className='rounded-xl min-w-full bg-blue-600 text-white flex flex-col md:flex-wrap p-4 md:p-8 mx-2 md:mx-4 mb-4 shadow-md'>
+		<div className='rounded-xl bg-gradient-to-t from-indigo-800 to-indigo-700 text-indigo-100 flex flex-col p-6 md:p-8 lg:p-10 mx-2 md:mx-4 mb-4 shadow-lg'>
 
-			<div className="footer-top flex flex-col md:flex-row justify-between w-full space-y-8 md:space-y-0">
-				<div className="footer-logo w-full md:w-[33%] flex justify-center md:justify-start">
-					<img className="w-auto max-h-16 md:max-h-full md:max-w-32" src="/images/logo-white.png"></img>
+			{/* Footer Top: Use Flexbox for Logo | Links structure */}
+			<div className="flex flex-col md:flex-row justify-between items-center md:items-start w-full gap-8">
+				{/* Logo Column */}
+				<div className="flex-shrink-0 flex justify-center md:justify-start">
+					<Link to="/" className="flex items-center opacity-90 hover:opacity-100 transition-opacity">
+						<img className="w-auto max-h-16 md:max-h-20" src="/images/logo-white.png" alt="Abominable Creamery Logo"></img>
+					</Link>
 				</div>
-				<div className="footer-links grow flex flex-col space-y-8 md:flex-row md:justify-between md:space-y-0">
+				{/* Link Columns Container - Aligned Right */}
+				<div className="flex flex-col md:flex-row md:justify-end gap-8 md:gap-10 lg:gap-16 w-full md:w-auto">
 					{footerColumns.map((column, i) =>
 						<FooterColumn column={column} key={i} />
 					)}
 				</div>
 			</div>
 
-			<div className="footer-bottom flex flex-col md:flex-row justify-between w-full mt-8 md:mt-16 space-y-8 md:space-y-0 md:items-end">
+			<div className="flex flex-col md:flex-row justify-between items-center w-full mt-8 md:mt-10 space-y-6 md:space-y-0 border-t border-indigo-600/70 pt-6 md:pt-8">
 
-				<div className="w-full md:w-auto">
-					<div className='flex text-base md:text-xl items-center w-full'>
-						<span className="material-symbols-outlined">
+				<div className="w-full md:w-1/2 lg:w-1/3 text-center md:text-left">
+					<div className='flex text-sm md:text-base items-center w-full justify-center md:justify-start mb-3'>
+						<span className="material-symbols-outlined mr-2 text-indigo-300">
 							email
 						</span>
-						<div className='ml-2 uppercase font-semibold'>Subscribe to our newsletter</div>
+						<div className='uppercase font-semibold tracking-wide text-indigo-100'>Subscribe to our newsletter</div>
 					</div>
-
-					<div className='border-white border-[1px] rounded-full flex flex-col sm:flex-row mt-4 md:mt-6 text-sm items-stretch sm:items-center'>
-						<div className='flex-grow ml-4 sm:ml-6 py-2 sm:py-0'>
-							<input type="text" className='bg-blue-600 w-full p-2 focus-visible:outline-none placeholder-gray-300' placeholder='Enter your email' />
-						</div>
-						<div className='bg-blue-300 text-blue-800 flex font-bold uppercase justify-center items-center rounded-full m-2 py-3 px-6 sm:ml-4 hover:bg-blue-200 cursor-pointer'>
-							Subscribe
-							<span className="material-symbols-outlined ml-1">keyboard_arrow_right</span>
-						</div>
+					<div className='flex flex-col sm:flex-row gap-2 items-stretch'>
+						<input 
+							type="email" 
+							className='flex-grow bg-indigo-600/50 border border-indigo-500/50 text-white rounded-md px-4 py-2.5 focus-visible:outline-none focus:border-indigo-300 focus:ring-1 focus:ring-indigo-300 placeholder-indigo-200 shadow-inner'
+							placeholder='Enter your email' 
+						/>
+						<button className='bg-amber-500 text-amber-900 flex-shrink-0 font-bold uppercase rounded-md px-5 py-2.5 hover:bg-amber-400 transition-colors duration-200 ease-in-out flex items-center justify-center space-x-1 text-sm shadow hover:shadow-md'>
+							<span>Subscribe</span>
+							<span className="material-symbols-outlined text-lg">keyboard_arrow_right</span>
+						</button>
 					</div>
 				</div>
 
-				<div onClick={() => navigate('/stores') } className='w-full md:w-auto flex flex-col justify-end items-center md:items-end hover:cursor-pointer'>
-					<div className='flex text-base md:text-xl items-center w-full md:w-auto border-[1px] border-white p-3 md:p-4 rounded-xl hover:bg-blue-500 transition-colors duration-200'>
-						<span className="material-symbols-outlined">
+				<div onClick={() => navigate('/stores') } className='w-full md:w-auto flex justify-center md:justify-end hover:cursor-pointer group'>
+					<div className='flex text-sm md:text-base items-center w-auto border border-indigo-500/50 px-5 py-3 rounded-lg group-hover:bg-indigo-600/60 group-hover:border-indigo-300 transition-colors duration-200 ease-in-out shadow hover:shadow-md'>
+						<span className="material-symbols-outlined mr-2 text-indigo-300">
 							map
 						</span>
-						<div className='ml-2 uppercase font-semibold'>Find Store</div>
+						<div className='uppercase font-semibold tracking-wide text-indigo-100'>Find Store</div>
 					</div>
 				</div>
 

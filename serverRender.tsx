@@ -4,7 +4,7 @@ import { renderToString } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 
 import AppRoutes from './src/routes/index';
-
+import { CartProvider } from './src/context/CartContext';
 import { siteData } from './src/utils/content';
 
 const app: Express = express();
@@ -26,7 +26,9 @@ app.get('*', (req: Request, res: Response) => {
 	<body>
 		<div id="root" class="min-h-screen flex-col flex">${renderToString(
 		<StaticRouter location={req.url} >
-			<AppRoutes />
+			<CartProvider>
+				<AppRoutes />
+			</CartProvider>
 		</StaticRouter>)}
 		</div>
 		<script src="/js/bundle.js" defer></script>

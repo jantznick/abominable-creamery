@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Import Google Font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* Optional: Add any custom base styles here */
+body {
+	@apply font-sans; /* Ensures Tailwind applies the default font */
+}
+
 @layer base {
 
 	:root {

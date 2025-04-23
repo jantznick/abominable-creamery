@@ -8,6 +8,7 @@ interface FlavorData {
 	simpleName?: string; // Optional based on usage
 	description?: string; // Optional based on usage
 	imageSrc?: string; // Optional based on usage
+	price?: string;
 }
 
 // Define props type for the component
@@ -28,21 +29,25 @@ export const MiniFlavorCard: React.FC<MiniFlavorCardProps> = ({flavor}) => {
 	return (
 		<Link
 			to={`/flavors/${flavor.id}`}
-			className='flex flex-col w-full sm:w-[calc(50%-1rem)] lg:w-[calc(25%-1.5rem)] p-4 md:p-6 rounded-lg shadow-md border-black border-2 hover:shadow-lg transition-shadow duration-200 bg-white'
+			className='group flex flex-col w-full sm:w-[calc(50%-0.75rem)] lg:w-[calc(25%-1.125rem)] rounded-lg shadow-md border border-slate-200 hover:shadow-lg transform transition duration-300 ease-in-out hover:-translate-y-1 bg-white overflow-hidden'
 		>
-			<div className='aspect-square overflow-hidden rounded-md'>
+			<div className='aspect-square overflow-hidden'>
 				<img
-					className="w-full h-full object-cover"
+					className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
 					src={flavor.imageSrc || `/images/${colors[randomNumber]}-soon.png`}
 					alt={flavor.name}
 				/>
 			</div>
 
-			<div className='font-bold mt-4 text-lg md:text-xl text-gray-800'>{flavor.name}</div>
-			<div className='text-sm text-gray-600'>{flavor.simpleName}</div>
+			<div className='flex flex-col flex-grow p-4'>
+				<h3 className='font-semibold text-lg text-slate-800 group-hover:text-indigo-600 transition-colors duration-200 leading-tight'>{flavor.name}</h3>
+				{flavor.simpleName && <p className='text-sm text-slate-500 mb-2'>{flavor.simpleName}</p>}
+				
+				<p className='text-sm text-slate-600 line-clamp-3 mb-3 flex-grow'>{flavor.description}</p>
 
-			<div className='mt-4 flex-grow'>
-				<div className='text-sm md:text-base text-gray-700 line-clamp-3'>{flavor.description}</div>
+				{flavor.price && (
+					<p className="font-semibold text-lg text-amber-600 mt-auto pt-2">${flavor.price}</p>
+				)}
 			</div>
 		</Link>
 	)

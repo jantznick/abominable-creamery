@@ -1,23 +1,26 @@
 import React, { useState } from 'react'
 import classNames from 'classnames';
-
-import { header } from '../../utils/content'
 import { Link, useNavigate } from 'react-router-dom';
 
-export const Header = () => {
+import { header } from '../../utils/content'
+import { useCart } from '../../context/CartContext';
 
+export const Header = () => {
 	const [toggleSearch, setToggleSearch] = useState(false);
 	const [searchTerm, setSearchTerm] = useState('');
 	const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 	const navigate = useNavigate();
+	const { getItemCount } = useCart();
+
+	const itemCount = getItemCount();
 
 	const handleSearch = () => {
 		setToggleSearch(false)
 		navigate(`search?flavor=${searchTerm}`)
+		setSearchTerm(''); // Clear search term after navigation
 	}
 
 	const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-		console.log(event);
 		if (event.key === 'Enter') {
 			handleSearch();
 		}
@@ -26,29 +29,71 @@ export const Header = () => {
 	return (
 		<div
 			id="header"
-			className='relative flex flex-col md:flex-row mt-2 p-4 md:mt-4 md:p-8 mx-2 md:mx-4 shadow-md rounded-xl justify-between items-center bg-blue-600 space-y-4 md:space-y-0'
+			className='relative flex justify-between items-center mt-3 p-4 md:p-5 lg:p-6 mx-2 md:mx-4 shadow-lg rounded-xl bg-gradient-to-b from-indigo-700 to-indigo-800'
 		>
-
-			<div className='w-full flex justify-between items-center'>
-				<div className='flex items-center'>
-					<Link to="/" className="flex items-center">
-						<img className="w-10 h-10" src="/images/logo.png" alt="Logo"></img>
-					</Link>
-				</div>
-
-				<div className='hidden md:flex md:space-x-6'>
+			<div className="flex items-center space-x-4 md:space-x-6 lg:space-x-8">
+				<Link to="/" className="flex-shrink-0 flex items-center">
+					<img className="w-10 h-10 md:w-11 md:h-11" src="/images/logo.png" alt="Logo"></img>
+				</Link>
+				<div className='hidden md:flex items-center space-x-3 lg:space-x-4'>
 					{header.links.filter(link => link.active).map((link, i) =>
-						<Link key={i} to={link.link} className='header-link text-white hover:text-gray-200 px-3 py-2 rounded-md text-sm font-medium'>
+						<Link 
+							key={i} 
+							to={link.link} 
+							className='header-link text-indigo-100 hover:text-white hover:bg-indigo-600/60 px-3 py-2 rounded-md text-sm lg:text-base font-medium transition-colors duration-200'
+						>
 							{link.text}
 						</Link>
 					)}
 				</div>
+			</div>
+
+			<div className="flex items-center space-x-3 md:space-x-4">
+				{header.searchActive &&
+					<div className={classNames(
+						'items-center group', 
+						{ 'flex': toggleSearch, 'hidden md:flex': !toggleSearch }
+					)}>
+						<input
+							type="text"
+							placeholder='Find a Flavor...'
+							value={searchTerm}
+							className={classNames(
+								'transition-all duration-300 ease-in-out',
+								'rounded-full',
+								'py-1.5 px-4',
+								'w-32 sm:w-40 md:w-48 lg:w-64',
+								'focus-visible:outline-none focus:ring-2 focus:ring-indigo-300',
+								'text-gray-900'
+							)}
+							onChange={(e) => setSearchTerm(e.target.value)}
+							onKeyDown={handleKeyDown}
+						/>
+					</div>
+				}
+				<span
+					onClick={() => setToggleSearch(!toggleSearch)} 
+					className="text-3xl hover:cursor-pointer material-symbols-outlined text-indigo-100 hover:text-white transition-colors duration-200"
+				>
+					search
+				</span>
+				
+				{header.shoppingActive && (
+					<Link to="/cart" className="relative text-3xl hover:cursor-pointer material-symbols-outlined text-indigo-100 hover:text-white transition-colors duration-200">
+						shopping_cart
+						{itemCount > 0 && (
+							<span className="absolute -top-1 -right-2 flex items-center justify-center w-5 h-5 bg-amber-400 text-indigo-900 text-xs font-bold rounded-full">
+								{itemCount}
+							</span>
+						)}
+					</Link>
+				)}
 
 				<div className="md:hidden flex items-center">
 					<button
 						onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
 						type="button"
-						className="inline-flex items-center justify-center p-2 rounded-md text-white hover:text-gray-200 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-white"
+						className="inline-flex items-center justify-center p-1 rounded-md text-indigo-200 hover:text-white hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-white transition-colors duration-200"
 						aria-controls="mobile-menu"
 						aria-expanded={isMobileMenuOpen}
 					>
@@ -63,48 +108,19 @@ export const Header = () => {
 				</div>
 			</div>
 
-			<div className='w-full flex items-center justify-center md:w-auto md:justify-end mt-4 md:mt-0'>
-				{header.searchActive &&
-					<div className='flex items-center w-full max-w-xs md:max-w-none md:w-auto'>
-						<input
-							type="text"
-							placeholder='Find a Flavor...'
-							className={classNames(
-								'duration-200',
-								'origin-right',
-								'rounded-xl',
-								'py-2',
-								'px-4',
-								'w-full md:w-auto md:min-w-80',
-								'focus-visible:outline-none',
-								'text-gray-800',
-								{ 'scale-x-100 opacity-100 ml-2': toggleSearch, 'scale-x-0 opacity-0': !toggleSearch }
-							)}
-							onChange={(e) => setSearchTerm(e.target.value)}
-							onKeyDown={handleKeyDown}
-						/>
-						<span
-							onClick={toggleSearch ? handleSearch : () => setToggleSearch(!toggleSearch)}
-							className="text-3xl ml-2 hover:cursor-pointer material-symbols-outlined text-white"
-						>
-							search
-						</span>
-					</div>
-				}
-				{header.shoppingActive &&
-					<span className="text-3xl ml-4 material-symbols-outlined text-white hover:cursor-pointer">
-						shopping_cart
-					</span>
-				}
-			</div>
-
-			<div className={classNames('md:hidden w-full absolute top-full left-0 bg-blue-600 z-20 shadow-lg rounded-b-xl transition-transform duration-300 ease-in-out', { 'max-h-screen opacity-100': isMobileMenuOpen, 'max-h-0 opacity-0 overflow-hidden': !isMobileMenuOpen })} id="mobile-menu">
-				<div className="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+			<div 
+				className={classNames(
+					'md:hidden w-full absolute top-full left-0 right-0 bg-gradient-to-b from-indigo-800 to-indigo-900 z-20 shadow-lg rounded-b-xl overflow-hidden border-t border-indigo-500/50 transition-all duration-300 ease-in-out',
+					{ 'max-h-screen opacity-100 visible pt-4 pb-5': isMobileMenuOpen, 'max-h-0 opacity-0 invisible': !isMobileMenuOpen } 
+				)}
+				id="mobile-menu"
+			>
+				<div className="px-4 space-y-2">
 					{header.links.filter(link => link.active).map((link, i) =>
 						<Link
 							key={i}
 							to={link.link}
-							className='header-link text-white hover:bg-blue-700 hover:text-white block px-3 py-2 rounded-md text-base font-medium'
+							className='header-link text-indigo-100 hover:bg-indigo-600/80 hover:text-white block px-3 py-3 rounded-md text-lg font-medium transition-colors duration-200'
 							onClick={() => setIsMobileMenuOpen(false)}
 						>
 							{link.text}

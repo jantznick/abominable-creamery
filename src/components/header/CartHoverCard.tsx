@@ -51,16 +51,24 @@ export const CartHoverCard: React.FC<CartHoverCardProps> = ({ items, total, item
                 )}
             </div>
             <div className="border-t border-slate-200 px-4 py-3 bg-slate-50 space-y-2">
-                 <div className="flex justify-between text-sm font-semibold text-slate-700">
+                 <div className="flex justify-between text-sm font-semibold text-slate-700 mb-2">
                     <span>Subtotal:</span>
                     <span>${total.toFixed(2)}</span>
                 </div>
-                 <Link 
-                    to="/cart"
-                    className="block w-full bg-indigo-600 hover:bg-indigo-700 text-white text-center font-bold py-2 px-4 rounded-md text-sm transition-colors duration-200 ease-in-out"
-                 >
-                    View Cart & Checkout
-                 </Link>
+                <div className="flex space-x-2">
+                    <Link 
+                        to="/cart"
+                        className="flex-1 block w-full bg-slate-200 hover:bg-slate-300 text-slate-700 text-center font-medium py-2 px-4 rounded-md text-sm transition-colors duration-200 ease-in-out"
+                    >
+                        View Cart
+                    </Link>
+                    <Link 
+                        to="/checkout"
+                        className="flex-1 block w-full bg-indigo-600 hover:bg-indigo-700 text-white text-center font-bold py-2 px-4 rounded-md text-sm transition-colors duration-200 ease-in-out"
+                    >
+                        Checkout
+                    </Link>
+                </div>
             </div>
         </div>
     );

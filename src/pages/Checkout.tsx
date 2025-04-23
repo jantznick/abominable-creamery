@@ -216,7 +216,7 @@ export const Checkout = () => {
             setIsLoadingSecret(true);
             setErrorLoadingSecret(null);
             console.log("Fetching Payment Intent for items:", cartItemsForPayload);
-            fetch('/create-payment-intent', {
+            fetch('/api/stripe/create-payment-intent', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 // Send the items array instead of the calculated amount

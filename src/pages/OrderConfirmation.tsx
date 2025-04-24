@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 // Removed Stripe imports as status check is now backend-driven
 // import { loadStripe, Stripe } from '@stripe/stripe-js';
+import { AddressFormData } from '../types/data'; // Import address form data type
 
 // Removed stripePromise initialization
 
@@ -31,6 +32,7 @@ interface CheckoutDataForConfirmation {
         email: string;
         phone?: string;
     };
+    shouldSaveAddress?: boolean; // Add the optional flag
 }
 
 export const OrderConfirmation = () => {
@@ -104,8 +106,9 @@ export const OrderConfirmation = () => {
 
                         // --- Call POST /api/orders --- 
                         if (checkoutData) {
-                            // Add paymentIntentId to the data being sent
                             const orderPayload = { ...checkoutData, paymentIntentId };
+                            // Don't send shouldSaveAddress flag to the order API
+                            delete orderPayload.shouldSaveAddress; 
 
                             fetch('/api/orders', {
                                 method: 'POST',
@@ -120,7 +123,43 @@ export const OrderConfirmation = () => {
                                 }
                                 console.log("Order Confirmation: Order created successfully:", orderResData);
                                 setMessage(`Payment successful! Your order #${orderResData.orderId} is confirmed.`);
-                                clearCart(); // <-- Clear cart ONLY on successful order creation
+                                clearCart(); 
+
+                                // --- Attempt to Save Address After Successful Order --- 
+                                if (checkoutData?.shouldSaveAddress && checkoutData?.shippingAddress) {
+                                    console.log("Attempting to save address to profile...");
+                                    const addressPayload: AddressFormData = {
+                                        type: 'SHIPPING', // Assume SHIPPING for checkout addresses
+                                        streetAddress: checkoutData.shippingAddress.address1,
+                                        city: checkoutData.shippingAddress.city,
+                                        state: checkoutData.shippingAddress.state,
+                                        postalCode: checkoutData.shippingAddress.postalCode,
+                                        country: checkoutData.shippingAddress.country,
+                                        isDefault: false, // Don't automatically set as default from checkout
+                                    };
+                                    
+                                    fetch('/api/addresses', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify(addressPayload)
+                                    })
+                                    .then(async (addrRes) => {
+                                        if (!addrRes.ok) {
+                                            const addrErrorData = await addrRes.json().catch(() => ({}));
+                                            // Log error but don't fail the confirmation page
+                                            console.warn("Order Confirmation: Failed to save address:", addrRes.status, addrErrorData.message);
+                                        } else {
+                                            console.log("Order Confirmation: Address saved successfully.");
+                                            // Optionally show a small success note?
+                                        }
+                                    })
+                                    .catch(err => {
+                                        // Log error but don't fail the confirmation page
+                                        console.warn("Order Confirmation: Network error saving address:", err);
+                                    });
+                                } // End address save check
+                                // ----------------------------------------------------
+
                             })
                             .catch(err => {
                                 console.error("Order Confirmation: Error during order creation API call:", err);

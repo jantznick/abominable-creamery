@@ -1,7 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 // Import shared types from the new types file
 import { OrderData, ApiUser, OrderItemData } from '../../types/data'; 
 import { OrderCard } from '../orders/OrderCard'; // Import the new component
+import AddressManager from './AddressManager'; // Import AddressManager
+import UserProfileModal from './UserProfileModal'; // Import profile modal
+import { formatPhoneNumber } from '../../utils/formatting'; // Import the new formatter
 
 // Define props required by this component
 interface UserProfileViewProps {
@@ -22,15 +25,30 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
     formatCurrency
 }) => {
     const ordersToDisplay = orders || []; // Ensure it's an array
+    const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
 
     return (
         <div>
             <h2 className="text-xl font-semibold mb-6 border-b pb-3">Welcome, {user.name || user.email}!</h2>
             
             <div className="mb-8">
-                <h3 className="text-lg font-semibold mb-3">Account Details</h3>
+                <div className="flex justify-between items-center mb-3">
+                    <h3 className="text-lg font-semibold">Account Details</h3>
+                    <button 
+                        onClick={() => setIsProfileModalOpen(true)}
+                        className="px-3 py-1 bg-slate-200 text-slate-700 text-xs font-medium rounded-md hover:bg-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-1"
+                    >
+                        Edit Profile
+                    </button>
+                </div>
                 <p className="text-slate-700"><span className="font-medium text-slate-800">Email:</span> {user.email}</p>
-                {/* Add other user details here if available/needed */}
+                <p className="text-slate-700"><span className="font-medium text-slate-800">Name:</span> {user.name || <span className="italic text-slate-500">Not Set</span>}</p>
+                <p className="text-slate-700">
+                    <span className="font-medium text-slate-800">Phone:</span> 
+                    {user.phone ? formatPhoneNumber(user.phone) : <span className="italic text-slate-500">Not Provided</span>}
+                </p>
+                {/* Display Role if needed */}
+                {/* <p className="text-slate-700"><span className="font-medium text-slate-800">Role:</span> {user.role}</p> */}
             </div>
 
             <div>
@@ -56,6 +74,20 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                     </div>
                 )}
             </div>
+
+            {/* Address Management Section */}
+            <div className="mt-8"> {/* Added margin-top consistent with other sections */}
+              <AddressManager />
+            </div>
+
+            {/* Profile Edit Modal */}
+            {user && ( // Ensure user data is available before rendering modal
+                <UserProfileModal 
+                    isOpen={isProfileModalOpen} 
+                    onClose={() => setIsProfileModalOpen(false)} 
+                    currentUser={user} 
+                />
+            )}
         </div>
     );
 }; 

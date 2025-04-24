@@ -10,6 +10,7 @@ interface SessionUser {
 	id: number;
 	email: string;
 	name: string | null;
+	phone?: string | null; // Add optional phone number
 	role: 'USER' | 'ADMIN'; // Match UserRole enum
 	createdAt: Date;
 	updatedAt: Date;
@@ -72,23 +73,33 @@ router.post('/signup', checkNotAuthenticated, async (req: Request, res: Response
                 email,
                 passwordHash,
                 name: name || null, // Optional name
+                phone: null, // Initialize phone as null explicitly
                 role: email === process.env.ADMIN_EMAIL ? 'ADMIN' : 'USER' // Default role
             },
+            // Select the fields needed for the session
+            select: {
+                id: true,
+                email: true,
+                name: true,
+                phone: true,
+                role: true,
+                createdAt: true,
+                updatedAt: true,
+            }
         });
 
-        // Exclude hash - TypeScript infers userSessionData type
-        const { passwordHash: _, ...userSessionData } = newUser;
-        // Assign to session (should match SessionUser structure)
+        // Assign selected data directly to session (matches SessionUser structure)
         req.session.user = {
-            id: userSessionData.id,
-            email: userSessionData.email,
-            name: userSessionData.name,
-            role: userSessionData.role,
-            createdAt: userSessionData.createdAt,
-            updatedAt: userSessionData.updatedAt,
+            id: newUser.id,
+            email: newUser.email,
+            name: newUser.name,
+            phone: newUser.phone,
+            role: newUser.role,
+            createdAt: newUser.createdAt,
+            updatedAt: newUser.updatedAt,
         };
 
-        console.log('User signed up and logged in:', userSessionData.email);
+        console.log('User signed up and logged in:', newUser.email);
         res.status(201).json({ user: req.session.user }); // Send back session user data
 
     } catch (error) {
@@ -107,7 +118,19 @@ router.post('/login', checkNotAuthenticated, async (req: Request, res: Response)
 
     try {
         // Find user
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await prisma.user.findUnique({
+            where: { email },
+            // Select the fields needed for the session
+             select: {
+                id: true,
+                email: true,
+                name: true,
+                phone: true,
+                role: true,
+                createdAt: true,
+                updatedAt: true,
+            }
+        });
         if (!user) {
             return res.status(401).json({ message: 'Invalid email or password' }); // Unauthorized
         }
@@ -119,19 +142,18 @@ router.post('/login', checkNotAuthenticated, async (req: Request, res: Response)
         }
 
         // Login successful - Create session
-        // Exclude hash
-        const { passwordHash: _, ...userSessionData } = user;
-        // Assign to session (should match SessionUser structure)
+        // Assign selected data directly to session (matches SessionUser structure)
         req.session.user = {
-            id: userSessionData.id,
-            email: userSessionData.email,
-            name: userSessionData.name,
-            role: userSessionData.role,
-            createdAt: userSessionData.createdAt,
-            updatedAt: userSessionData.updatedAt,
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            phone: user.phone,
+            role: user.role,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt,
         };
 
-        console.log('User logged in:', userSessionData.email);
+        console.log('User logged in:', user.email);
         res.status(200).json({ user: req.session.user });
 
     } catch (error) {

@@ -28,15 +28,22 @@ enum OrderStatus {
   FAILED    // Payment failed
 }
 
+enum AddressType {
+  SHIPPING
+  BILLING
+}
+
 // Models
 
 model User {
   id            Int      @id @default(autoincrement())
   email         String   @unique
   name          String?
+  phone         String?  // Add optional phone number
   passwordHash  String
   role          UserRole @default(USER)
   orders        Order[]  // Relation to Orders
+  addresses     Address[] // Relation to Addresses
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -93,4 +100,23 @@ model Session {
   expire  DateTime // Timestamp when the session expires
 
   @@index([expire]) // Index for efficient session cleanup
+}
+
+model Address {
+  id            Int     @id @default(autoincrement())
+  userId        Int     // Relation to User
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade) // Cascade delete if user is deleted
+
+  type          AddressType // Shipping or Billing
+  streetAddress String
+  city          String
+  state         String
+  postalCode    String
+  country       String
+  isDefault     Boolean @default(false) // Whether this is the default address of its type for the user
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
 }

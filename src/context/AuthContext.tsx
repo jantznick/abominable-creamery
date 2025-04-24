@@ -6,6 +6,7 @@ interface User {
   email: string;
   name?: string | null;
   role: 'USER' | 'ADMIN';
+  phone?: string | null;
   // Add other relevant user fields
 }
 

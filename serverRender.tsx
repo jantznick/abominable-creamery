@@ -10,6 +10,8 @@ import prisma from './src/server/db';
 import authRouter from './src/server/routes/auth';
 import orderRouter from './src/server/routes/orders';
 import stripeRouter from './src/server/routes/stripe';
+import addressRouter from './src/server/routes/addresses';
+import userRouter from './src/server/routes/user';
 import { AuthProvider } from './src/context/AuthContext';
 import { ProductProvider } from './src/context/ProductContext';
 import { getStripeProducts } from './src/server/utils/stripeProducts';
@@ -40,8 +42,7 @@ if (!sessionSecret) {
 const PgSessionStore = connectPgSimple(session);
 const sessionStore = new PgSessionStore({
 	conString: process.env.DATABASE_URL,
-	tableName: 'Session',
-	// Removed prisma: prisma
+	tableName: 'Session'
 });
 
 app.use(session({
@@ -69,6 +70,8 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use('/api/auth', authRouter);
 app.use('/api/orders', orderRouter);
 app.use('/api/stripe', stripeRouter);
+app.use('/api/addresses', addressRouter);
+app.use('/api/users', userRouter);
 
 app.get('*', async (req: Request, res: Response) => {
 	if (!stripe) {

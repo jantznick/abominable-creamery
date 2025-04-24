@@ -5,6 +5,7 @@ import prisma from '../db'; // Adjusted path again
 import { CartItem } from '../../../src/context/CartContext'; // Adjust path as needed
 import { Decimal } from '@prisma/client/runtime/library'; // Import Decimal
 import { SessionUser } from '../types'; // Import SessionUser from the shared types file
+import { saveCheckoutAttempt, getCheckoutAttempt, deleteCheckoutAttempt } from '../utils/checkoutTmpStore';
 
 // Load environment variables
 dotenv.config();
@@ -93,13 +94,13 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 
 	let totalAmountCent = 0; // Use cents for Payment Intent amount
 	let containsSubscription = false;
-	const detailedCartItems: any[] = []; // For metadata context
+	const detailedCartItems: any[] = []; // For metadata context (still needed to build context object)
 
 	try {
 		// --- Step 1: Validate items, calculate total, check for subscriptions ---
 		for (const item of items) {
 			// Keep existing validation...
-			if (!item.priceId || typeof item.priceId !== 'string' ||
+			if (!item.priceId || typeof item.priceId !== 'string' || 
 				!item.quantity || typeof item.quantity !== 'number' || item.quantity <= 0 ||
 				!item.productId || typeof item.productId !== 'string' ||
 				!item.name || typeof item.name !== 'string' ||
@@ -127,7 +128,7 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 
 			totalAmountCent += (stripePrice.unit_amount ?? 0) * item.quantity;
 
-			// Build detailed item list for metadata
+			// Build detailed item list for context object
 			detailedCartItems.push({
 				priceId: item.priceId,
 				quantity: item.quantity,
@@ -139,19 +140,19 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 			});
 		}
 
-		// --- Step 2: Prepare Metadata Context ---
-		// Consolidate context needed by webhook handlers
+		// --- Step 2: Prepare Context Object (No longer stringified for metadata) ---
 		const checkoutContext = {
-			// User ID is crucial for linking records later
 			userId: sessionUser?.id || null,
-			// Store the detailed cart representation
 			cartItems: detailedCartItems,
-			// Store contact/shipping info as well for order creation
 			contactInfo: contactInfo,
 			shippingAddress: shippingAddress,
 		};
-		const contextString = JSON.stringify(checkoutContext);
-		// TODO: Add check for metadata size limits if contextString becomes very large
+		// --- Removed contextString = JSON.stringify(checkoutContext); ---
+
+		// --- Step 2.5: Save context to temporary store and get ID ---
+		console.log("Saving checkout context to temporary store...");
+		const checkoutAttemptId = await saveCheckoutAttempt(checkoutContext);
+		console.log(`Checkout context saved with ID: ${checkoutAttemptId}`);
 
 		// --- Step 3: Create SetupIntent (for subs) or PaymentIntent (one-time) ---
 		let clientSecret: string | null = null;
@@ -192,13 +193,13 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 				sessionUser.stripeCustomerId = stripeCustomerId; // Update session
 			}
 
-			// Create Setup Intent
+			// Create Setup Intent with only checkoutAttemptId in metadata
 			console.log(`Creating SetupIntent for customer: ${stripeCustomerId}`);
 			const setupIntent = await stripe.setupIntents.create({
 				customer: stripeCustomerId,
-				usage: 'on_session', // Optimize for saving card during checkout session
-				automatic_payment_methods: { enabled: true }, // Allow Stripe to manage payment methods
-				metadata: { checkout_context: contextString },
+				usage: 'on_session',
+				automatic_payment_methods: { enabled: true },
+				metadata: { checkoutAttemptId: checkoutAttemptId }, // <-- Use new ID
 			});
 			console.log(`SetupIntent ${setupIntent.id} created.`);
 			clientSecret = setupIntent.client_secret;
@@ -208,30 +209,33 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 			console.log("Creating PaymentIntent for one-time purchase.");
 			if (totalAmountCent <= 0) {
 				return res.status(400).send({ error: 'Total amount must be positive for one-time payment.' });
-			}
+		}
 
-			const paymentIntent = await stripe.paymentIntents.create({
+		// Create Payment Intent with only checkoutAttemptId in metadata
+		const paymentIntent = await stripe.paymentIntents.create({
 				amount: totalAmountCent,
-				currency: 'usd',
+				currency: 'usd', 
 				automatic_payment_methods: { enabled: true },
-				metadata: { checkout_context: contextString },
-				// Add customer ID if user is logged in, even for one-time, to potentially link payment? Optional.
-				// customer: sessionUser?.stripeCustomerId || undefined,
+				metadata: { checkoutAttemptId: checkoutAttemptId }, // <-- Use new ID
+				// customer: sessionUser?.stripeCustomerId || undefined, // Optional customer link
 			});
 			console.log(`PaymentIntent ${paymentIntent.id} created.`);
 			clientSecret = paymentIntent.client_secret;
 		}
 
-		// --- Step 4: Return Client Secret ---
+		// --- Step 4: Return Client Secret AND Checkout Attempt ID ---
 		if (!clientSecret) {
 			throw new Error("Failed to initialize payment (client secret missing).");
 		}
-		res.send({ clientSecret: clientSecret });
+		// Return both values to the frontend
+		res.send({ clientSecret: clientSecret, checkoutAttemptId: checkoutAttemptId });
 
 	} catch (error: any) {
 		console.error("Error processing /initiate-checkout:", error);
 		let userMessage = 'Internal server error processing payment.';
-		if (error.type === 'StripeCardError') { userMessage = error.message; }
+		if (error.message === 'Failed to save checkout attempt data.') { // Catch error from saveCheckoutAttempt
+			userMessage = error.message;
+		} else if (error.type === 'StripeCardError') { userMessage = error.message; }
 		else if (error.type === 'StripeInvalidRequestError') { userMessage = `Invalid data provided: ${error.message}`; }
 		res.status(500).send({ error: userMessage });
 	}
@@ -278,39 +282,43 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 			const setupIntent = event.data.object as Stripe.SetupIntent;
 			console.log(`---> Handling ${event.type} for SetupIntent ID: ${setupIntent.id}`);
 
+			// --- Re-enabled Logic Using Temporary Store ---
 			try {
 				// --- 1. Extract data from SetupIntent --- 
 				const customerId = typeof setupIntent.customer === 'string' ? setupIntent.customer : null;
 				const paymentMethodId = typeof setupIntent.payment_method === 'string' ? setupIntent.payment_method : null;
-				const contextString = setupIntent.metadata?.checkout_context;
+				// Get checkoutAttemptId from metadata
+				const checkoutAttemptId = setupIntent.metadata?.checkoutAttemptId;
 
 				// --- 2. Validate extracted data --- 
 				if (!customerId || !paymentMethodId) {
 					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing customer ID or payment method ID.`);
 					break; // Cannot proceed without customer/payment method
 				}
-				if (!contextString) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing checkout_context metadata.`);
-					break; // Cannot proceed without context
+				if (!checkoutAttemptId) {
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing checkoutAttemptId metadata.`);
+					break; // Cannot proceed without context ID
 				}
 
-				// --- 3. Parse Context --- 
-				let context: any;
-				try {
-					context = JSON.parse(contextString);
-				} catch (parseError) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Failed to parse checkout_context metadata:`, parseError);
-					break;
+				// --- 3. Retrieve Context from Temporary Store --- 
+				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Retrieving context using ID: ${checkoutAttemptId}`);
+				const context = await getCheckoutAttempt(checkoutAttemptId);
+
+				if (!context) {
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Failed to retrieve checkout context for ID: ${checkoutAttemptId}. Data might have expired or been deleted.`);
+					// Potentially log more details or send an alert
+					break; // Cannot proceed without context
 				}
+				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Successfully retrieved context.`);
 
 				const { userId, cartItems, contactInfo, shippingAddress } = context;
 
 				if (!userId || !cartItems || !Array.isArray(cartItems) || cartItems.length === 0 || !contactInfo || !shippingAddress) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Invalid context structure in metadata.`);
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Invalid context structure retrieved for ID: ${checkoutAttemptId}.`);
 					break;
 				}
 
-				// --- 4. Prepare for Stripe Subscription Creation --- 
+				// --- 4. Prepare for Stripe Subscription Creation (using retrieved context) --- 
 				const subscriptionItems = cartItems
 					.filter((item: any) => item.isSubscription)
 					.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
@@ -320,9 +328,9 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 					.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
 
 				if (subscriptionItems.length === 0) {
-					// This shouldn't happen if the SI was created correctly, but good to check.
-					console.warn(`Webhook (SetupIntent Succeeded ${setupIntent.id}): No subscription items found in context. Skipping subscription creation.`);
-					// Maybe handle one-time items here if they exist? Or rely on payment_intent.succeeded?
+					console.warn(`Webhook (SetupIntent Succeeded ${setupIntent.id}): No subscription items found in context ID: ${checkoutAttemptId}. Skipping subscription creation.`);
+					// If no subscription items, maybe attempt to delete the attempt data?
+					await deleteCheckoutAttempt(checkoutAttemptId);
 					break;
 				}
 
@@ -348,28 +356,26 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 						console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): Starting DB transaction...`);
 						
 						// a) Create Subscription Record
-						// We might not have currentPeriodEnd yet if using default_incomplete
 						const subEndDateRaw = (stripeSubscription as any).current_period_end;
 						const subEndDate = typeof subEndDateRaw === 'number' ? new Date(subEndDateRaw * 1000) : undefined;
-						// Assume only one subscription item for now to get priceId/interval
 						const firstSubItemContext = cartItems.find((item: any) => item.isSubscription);
-
+						
 						const newLocalSub = await tx.subscription.create({
 							data: {
 								userId: userId,
 								stripeSubscriptionId: stripeSubscription.id,
-								stripePriceId: firstSubItemContext?.priceId || 'unknown', // Fallback
-								status: stripeSubscription.status, // Will likely be 'incomplete' initially
-								interval: firstSubItemContext?.recurringInterval || 'unknown', // Fallback
+								stripePriceId: firstSubItemContext?.priceId || 'unknown',
+								status: stripeSubscription.status,
+								interval: firstSubItemContext?.recurringInterval || 'unknown',
 								currentPeriodEnd: subEndDate,
 								cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
-								collectionPaused: (stripeSubscription as any).pause_collection?.behavior === 'void'
+								collectionPaused: (stripeSubscription as any).pause_collection?.behavior === 'void',
+								checkoutAttemptId: checkoutAttemptId // <-- Save the ID
 							}
 						});
 						console.log(`        Created local Subscription record: ${newLocalSub.id}`);
 
 						// b) Create Order Record (linking to subscription)
-						// Calculate total amount from context cartItems (prices are strings)
 						let orderTotalAmount = 0;
 						cartItems.forEach((item: any) => {
 							const price = parseFloat(item.price);
@@ -382,8 +388,9 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 						const newOrder = await tx.order.create({
 							data: {
 								userId: userId,
-								subscriptionId: newLocalSub.id, // Link to the NEW local subscription ID
+								subscriptionId: newLocalSub.id,
 								totalAmount: totalAmountDecimal, 
+								// Use OrderStatus enum value
 								status: 'PAID', // Assume PAID because SetupIntent succeeded
 								contactEmail: contactInfo.email,
 								contactPhone: contactInfo.phone || null,
@@ -394,12 +401,13 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 								shippingState: shippingAddress.state,
 								shippingPostalCode: shippingAddress.postalCode,
 								shippingCountry: shippingAddress.country,
+								checkoutAttemptId: checkoutAttemptId, // <-- Save the ID
 								items: {
 									create: cartItems.map((item: any) => ({
 										productId: item.productId,
 										productName: item.productName || 'Unknown',
 										quantity: item.quantity,
-										price: new Decimal(item.price || 0), // Ensure price is Decimal
+										price: new Decimal(item.price || 0), 
 									})),
 								},
 							},
@@ -410,9 +418,15 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 					}); // End Transaction
 					console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): DB transaction completed.`);
 				
+					// --- 7. Delete Temporary Context Data --- 
+					console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): Deleting temporary context ID: ${checkoutAttemptId}`);
+					await deleteCheckoutAttempt(checkoutAttemptId);
+					console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): Temporary context deleted.`);
+				
 				} catch (txError) {
 					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): DB transaction failed:`, txError);
 					// If the transaction fails, the Stripe subscription still exists.
+					// Also, the temporary context data was NOT deleted.
 					// Need robust error handling / retry / notification logic here.
 				}
 
@@ -420,55 +434,67 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 				console.error(`Webhook Error (SetupIntent Succeeded ${setupIntent.id}): Error processing event:`, error);
 				// Don't send 500 to Stripe unless it's a webhook signature issue
 			}
+			// --- End Re-enabled Logic ---
 			break;
 
 		case 'payment_intent.succeeded':
 			const paymentIntent = event.data.object as Stripe.PaymentIntent;
 			console.log(`---> Handling ${event.type} for PaymentIntent ID: ${paymentIntent.id}`);
 
+			// --- Re-enabled Logic Using Temporary Store ---
 			try {
-				// --- 1. Extract Context --- 
-				const contextString = paymentIntent.metadata?.checkout_context;
-				if (!contextString) {
-					console.warn(`Webhook (PI Succeeded ${paymentIntent.id}): Missing checkout_context metadata. Cannot determine if one-time purchase.`);
-					// Maybe handle PIs created outside this flow? For now, skip.
+				// --- 1. Extract checkoutAttemptId --- 
+				const checkoutAttemptId = paymentIntent.metadata?.checkoutAttemptId;
+				if (!checkoutAttemptId) {
+					console.warn(`Webhook (PI Succeeded ${paymentIntent.id}): Missing checkoutAttemptId metadata. Cannot create order.`);
+					// If this PI wasn't created through our checkout flow, we can't link it easily.
 					break;
 				}
 
-				// --- 2. Parse Context --- 
-				let context: any;
-				try {
-					context = JSON.parse(contextString);
-				} catch (parseError) {
-					console.error(`Webhook (PI Succeeded ${paymentIntent.id}): Failed to parse checkout_context metadata:`, parseError);
+				// --- 2. Retrieve Context --- 
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Retrieving context using ID: ${checkoutAttemptId}`);
+				const context = await getCheckoutAttempt(checkoutAttemptId);
+				if (!context) {
+					console.error(`Webhook (PI Succeeded ${paymentIntent.id}): Failed to retrieve checkout context for ID: ${checkoutAttemptId}.`);
 					break;
 				}
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Successfully retrieved context.`);
 
 				const { userId, cartItems, contactInfo, shippingAddress } = context;
 
 				if (!cartItems || !Array.isArray(cartItems) || cartItems.length === 0 || !contactInfo || !shippingAddress) {
-					console.error(`Webhook (PI Succeeded ${paymentIntent.id}): Invalid context structure in metadata.`);
+					console.error(`Webhook (PI Succeeded ${paymentIntent.id}): Invalid context structure retrieved for ID: ${checkoutAttemptId}.`);
 					break;
 				}
 
-				// --- 3. Check if One-Time Purchase --- 
+				// --- 3. Check if One-Time Purchase (Crucial) --- 
 				const containsSubscription = cartItems.some((item: any) => item.isSubscription);
 				if (containsSubscription) {
-					console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Context indicates subscription involved. Order creation handled by setup_intent.succeeded. Skipping.`);
-					break; // IMPORTANT: Exit if subscription items were present
+					console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Context ID ${checkoutAttemptId} indicates subscription involved. Order creation handled by setup_intent.succeeded. Skipping PI handler.`);
+					// IMPORTANT: If subscription items were present, the SI handler should have created the order.
+					// We should delete the temp context here ONLY if we are sure the SI handler succeeded.
+					// For simplicity now, let the SI handler manage deletion.
+					break; 
 				}
 
 				// --- 4. Create Order for One-Time Purchase --- 
-				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Processing as one-time purchase order.`);
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Processing as one-time purchase order using context ID ${checkoutAttemptId}.`);
 				const totalAmountDecimal = new Decimal(paymentIntent.amount / 100);
 
-				// Check if order already exists for this PI? Less likely now, but good practice.
-				// We might need to add paymentIntentId to Order model if we want to prevent duplicates robustly.
+				// Optional: Check if order already exists with this checkoutAttemptId to prevent duplicates
+				const existingOrder = await prisma.order.findUnique({ where: { checkoutAttemptId } });
+				if (existingOrder) {
+					console.warn(`Webhook (PI Succeeded ${paymentIntent.id}): Order with checkoutAttemptId ${checkoutAttemptId} already exists (ID: ${existingOrder.id}). Skipping creation.`);
+					// Delete the temporary context data even if duplicate order found
+					await deleteCheckoutAttempt(checkoutAttemptId);
+					break;
+				}
 
-				await prisma.order.create({ // Use transaction later if needed
+				const newOrder = await prisma.order.create({ // Use transaction later if needed
 					data: {
 						userId: userId, // Use userId from context
 						totalAmount: totalAmountDecimal,
+						// Use OrderStatus enum value
 						status: 'PAID',
 						// Use contact/shipping info from context
 						contactEmail: contactInfo.email,
@@ -480,23 +506,31 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 						shippingState: shippingAddress.state,
 						shippingPostalCode: shippingAddress.postalCode,
 						shippingCountry: shippingAddress.country,
+						checkoutAttemptId: checkoutAttemptId, // <-- Save the ID
 						items: {
 							create: cartItems.map((item: any) => ({
 								productId: item.productId,
 								productName: item.productName || 'Unknown',
 								quantity: item.quantity,
-								price: new Decimal(item.price || 0), // Ensure price is Decimal
+								price: new Decimal(item.price || 0), 
 							})),
 						},
 					},
 					select: { id: true }
 				});
-				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Created one-time Order.`);
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Created one-time Order: ${newOrder.id} with checkoutAttemptId ${checkoutAttemptId}.`);
+
+				// --- 5. Delete Temporary Context Data --- 
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Deleting temporary context ID: ${checkoutAttemptId}`);
+				await deleteCheckoutAttempt(checkoutAttemptId);
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Temporary context deleted.`);
 
 			} catch (error) {
 				console.error(`Webhook Error (PI Succeeded ${paymentIntent.id}): Error creating order:`, error);
-				// Don't send 500 for processing errors if event was received ok
+				// If order creation fails, the temporary context is NOT deleted.
+				// Need retry/notification logic.
 			}
+			// --- End Re-enabled Logic ---
 			break;
 
 		case 'payment_intent.payment_failed':
@@ -668,7 +702,7 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 						});
 						console.log(`    ---> Inside Renewal Transaction: Renewal Order created successfully.`);
 					}); // End Renewal Transaction
-				} catch (error: any) {
+	} catch (error: any) {
 					// Catch errors during the renewal transaction
 					console.error(`---> ERROR processing renewal transaction for invoice ${paidInvoice.id}:`, error);
 				}

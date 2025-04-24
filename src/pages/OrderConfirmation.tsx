@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 // Removed Stripe imports as status check is now backend-driven
@@ -40,195 +40,166 @@ export const OrderConfirmation = () => {
     const [searchParams] = useSearchParams();
     const { clearCart } = useCart();
     // Removed stripeInstance state
-    const [message, setMessage] = useState<string | null>('Checking payment status...');
+    const [message, setMessage] = useState<string | null>('Loading confirmation details...');
     const [isLoading, setIsLoading] = useState(true);
     const [isSuccess, setIsSuccess] = useState<boolean | null>(null);
     // Removed hasFetched state as useEffect dependencies handle it
     const [paymentStatus, setPaymentStatus] = useState<string | null>(null);
     const [orderError, setOrderError] = useState<string | null>(null); // State for order creation errors
-    // Add state to track if a subscription was purchased
-    const [purchasedSubscription, setPurchasedSubscription] = useState(false);
+    // Removed purchasedSubscription state, can infer from URL param if needed
+
+    // State to store retrieved checkoutAttemptId
+    const [retrievedCheckoutAttemptId, setRetrievedCheckoutAttemptId] = useState<string | null>(null);
+    // Removed isSubscriptionCheckout state
 
     // Get Payment Intent ID from URL
     const paymentIntentId = searchParams.get('payment_intent');
     const redirectStatus = searchParams.get('redirect_status'); // Stripe might include this
 
+    // --- Effect 1: Retrieve Checkout Attempt ID and Clear Session Storage --- 
     useEffect(() => {
-        if (!paymentIntentId) {
-            console.error("Order Confirmation: Missing payment_intent in URL.");
-            setMessage("Error: Required payment information is missing from the URL. Cannot confirm order status.");
-            setIsSuccess(false);
-            setIsLoading(false);
-            return;
-        }
-
-        setIsLoading(true);
-        setOrderError(null);
-        setMessage('Verifying payment...'); // Initial message while fetching
-        console.log(`Order Confirmation: Verifying PaymentIntent ID: ${paymentIntentId}`);
-
-        // --- Retrieve Checkout Data from Session Storage ---
-        let checkoutData: CheckoutDataForConfirmation | null = null;
+        console.log("Order Confirmation: Attempting to retrieve checkoutAttemptId...");
+        let attemptId: string | null = null;
         try {
-            const storedData = sessionStorage.getItem('checkoutDataForConfirmation');
-            if (storedData) {
-                checkoutData = JSON.parse(storedData);
-                 // --- Check for subscription before removing data ---
-                // Ensure items exist and check the isSubscription flag
-                if (checkoutData?.items && Array.isArray(checkoutData.items) && checkoutData.items.some(item => item.isSubscription === true)) {
-                    console.log("Order Confirmation: Subscription item detected in checkout data.");
-                    setPurchasedSubscription(true);
-                }
-                // --------------------------------------------------
-                sessionStorage.removeItem('checkoutDataForConfirmation'); // Clear after retrieving
-                console.log("Order Confirmation: Retrieved checkout data from sessionStorage.");
+            // Read the ID string directly
+            attemptId = sessionStorage.getItem('checkoutDataForConfirmation');
+            if (attemptId) {
+                setRetrievedCheckoutAttemptId(attemptId);
+                console.log(`Order Confirmation: Retrieved checkoutAttemptId: ${attemptId}`);
+                sessionStorage.removeItem('checkoutDataForConfirmation'); 
+                console.log("Order Confirmation: Cleared checkout data key from sessionStorage.");
             } else {
-                throw new Error("Checkout data not found in session storage.");
+                console.warn("Order Confirmation: checkoutAttemptId not found in session storage.");
+                // If the ID is missing, we likely can't proceed correctly, especially for PI.
+                // The second effect will handle missing intent IDs, but this might be an issue.
             }
         } catch (error: any) {
-            console.error("Order Confirmation: Error retrieving or parsing checkout data:", error);
-            setMessage("Error: Could not retrieve necessary order details. Please contact support.");
+            console.error("Order Confirmation: Error retrieving checkoutAttemptId from storage:", error);
+            // Set error? Depends on how critical missing ID is vs. missing intent ID.
+        }
+    }, []); // Empty dependency array ensures this runs only once
+
+    // --- Effect 2: Check Intent Status --- 
+    useEffect(() => {
+        const paymentIntentId = searchParams.get('payment_intent');
+        const setupIntentId = searchParams.get('setup_intent');
+        const redirectStatus = searchParams.get('redirect_status');
+
+        // Removed dependency/check on retrievedCheckoutData
+
+        // Decide flow based on URL params
+        if (setupIntentId) {
+            // --- Handle Setup Intent Flow (Subscriptions) --- 
+            // (No changes needed here - logic is based on redirectStatus)
+            console.log(`Order Confirmation: Handling SetupIntent ${setupIntentId} with redirect_status: ${redirectStatus}`);
+            setIsLoading(true); 
+            setMessage('Processing subscription setup...');
+
+            if (redirectStatus === 'succeeded') {
+                setMessage('Your payment method was saved successfully! Your subscription is being finalized via webhook and will appear in your account shortly.');
+                setIsSuccess(true); 
+                setIsLoading(false);
+            } else {
+                setMessage(`There was an issue setting up your payment method (${redirectStatus}). Please try again or contact support.`);
+                setIsSuccess(false);
+                setIsLoading(false);
+            }
+
+        } else if (paymentIntentId) {
+            // --- Handle Payment Intent Flow (One-Time Purchases) ---
+            console.log(`Order Confirmation: Handling PaymentIntent ${paymentIntentId}`);
+            setIsLoading(true);
+            setOrderError(null);
+            setMessage('Verifying payment...'); 
+
+            // Fetch PI status from backend
+            fetch(`/api/stripe/payment-intent/${paymentIntentId}`)
+                .then(async (res) => {
+                    if (!res.ok) {
+                        const errorData = await res.json().catch(() => ({}));
+                        throw new Error(errorData.error || `Server error: ${res.status}`);
+                    }
+                    return res.json();
+                })
+                .then((data) => {
+                    console.log("Order Confirmation: Received payment intent data:", data);
+                    
+                    switch (data.status) {
+                        case 'succeeded':
+                            // PI succeeded client-side. Order creation now handled by webhook.
+                            // Just update the message.
+                            setMessage('Payment successful! Your order is being processed and confirmed via webhook.');
+                            setIsSuccess(true);
+                            // --- REMOVED Order creation fetch call --- 
+                            /* 
+                            if (!retrievedCheckoutData) { ... } // No longer needed
+                            console.log("Creating order..."); 
+                            const orderPayload = { ... }; 
+                            fetch('/api/orders', ...) ... 
+                            */
+                           setIsLoading(false); // Set loading false immediately after success status check
+                            break; 
+                        case 'processing':
+                            setMessage("Your payment is processing...");
+                            setIsSuccess(null);
+                            setIsLoading(false); 
+                            break;
+                        case 'requires_payment_method':
+                            setMessage('Payment failed. Please try another payment method.');
+                            setIsSuccess(false);
+                            setIsLoading(false); 
+                            break;
+                        default:
+                            setMessage('Unhandled payment status. Please contact support.');
+                            setIsSuccess(false);
+                            setIsLoading(false); 
+                            break;
+                    }
+                })
+                .catch(error => {
+                    console.error("Error fetching payment status:", error);
+                    setMessage(error.message || "Failed to retrieve payment status.");
+                    setIsSuccess(false);
+                    setIsLoading(false);
+                });
+        } else {
+            // --- No Intent ID Found --- 
+            console.error("Order Confirmation: Missing payment_intent OR setup_intent in URL.");
+            setMessage("Error: Required payment information is missing from the URL.");
             setIsSuccess(false);
             setIsLoading(false);
-            return; // Stop processing if data is missing
         }
-        // --- End Retrieve Checkout Data ---
 
-        // Fetch payment status from our backend endpoint
-        fetch(`/api/stripe/payment-intent/${paymentIntentId}`)
-            .then(async (res) => {
-                if (!res.ok) {
-                    const errorData = await res.json().catch(() => ({})); // Try to get error details
-                    console.error("API Error fetching payment intent:", res.status, errorData);
-                    throw new Error(errorData.error || `Server error: ${res.status}`);
-                }
-                return res.json();
-            })
-            .then((data) => {
-                console.log("Order Confirmation: Received payment intent data:", data);
-                setPaymentStatus(data.status); // Store the verified status
+    // Removed retrievedCheckoutData from dependency array
+    }, [searchParams]); 
 
-                switch (data.status) {
-                    case 'succeeded':
-                        setMessage('Payment successful! Processing order...');
-                        setIsSuccess(true);
-                        console.log("Order Confirmation: Payment succeeded. Attempting to create order...");
+    // --- Effect 3: Clear Cart on Success (No changes needed) --- 
+    useEffect(() => {
+        if (isSuccess === true) {
+            console.log("Order Confirmation: Clearing cart due to success state.");
+            clearCart();
+        }
+    }, [isSuccess, clearCart]); 
 
-                        // --- Call POST /api/orders --- 
-                        if (checkoutData) {
-                            const orderPayload = { ...checkoutData, paymentIntentId };
-                            // Don't send shouldSaveAddress flag to the order API
-                            delete orderPayload.shouldSaveAddress; 
-
-                            fetch('/api/orders', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(orderPayload),
-                            })
-                            .then(async (orderRes) => {
-                                const orderResData = await orderRes.json().catch(() => ({}));
-                                if (!orderRes.ok) {
-                                    console.error("API Error creating order:", orderRes.status, orderResData);
-                                    throw new Error(orderResData.message || `Failed to create order: ${orderRes.status}`);
-                                }
-                                console.log("Order Confirmation: Order created successfully:", orderResData);
-                                setMessage(`Payment successful! Your order #${orderResData.orderId} is confirmed.`);
-                                clearCart(); 
-
-                                // --- Attempt to Save Address After Successful Order --- 
-                                if (checkoutData?.shouldSaveAddress && checkoutData?.shippingAddress) {
-                                    console.log("Attempting to save address to profile...");
-                                    const addressPayload: AddressFormData = {
-                                        type: 'SHIPPING', // Assume SHIPPING for checkout addresses
-                                        streetAddress: checkoutData.shippingAddress.address1,
-                                        city: checkoutData.shippingAddress.city,
-                                        state: checkoutData.shippingAddress.state,
-                                        postalCode: checkoutData.shippingAddress.postalCode,
-                                        country: checkoutData.shippingAddress.country,
-                                        isDefault: false, // Don't automatically set as default from checkout
-                                    };
-                                    
-                                    fetch('/api/addresses', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify(addressPayload)
-                                    })
-                                    .then(async (addrRes) => {
-                                        if (!addrRes.ok) {
-                                            const addrErrorData = await addrRes.json().catch(() => ({}));
-                                            // Log error but don't fail the confirmation page
-                                            console.warn("Order Confirmation: Failed to save address:", addrRes.status, addrErrorData.message);
-                                        } else {
-                                            console.log("Order Confirmation: Address saved successfully.");
-                                            // Optionally show a small success note?
-                                        }
-                                    })
-                                    .catch(err => {
-                                        // Log error but don't fail the confirmation page
-                                        console.warn("Order Confirmation: Network error saving address:", err);
-                                    });
-                                } // End address save check
-                                // ----------------------------------------------------
-
-                            })
-                            .catch(err => {
-                                console.error("Order Confirmation: Error during order creation API call:", err);
-                                setOrderError(err.message || "Payment succeeded, but failed to save your order. Please contact support.");
-                                setIsSuccess(false); // Show overall failure if order saving fails
-                            })
-                            .finally(() => {
-                                setIsLoading(false); // Loading finished after order attempt
-                            });
-                        } else {
-                            // This case should ideally not be reached due to checks above
-                            console.error("Order Confirmation: Checkout data missing before order creation call.");
-                            setOrderError("Critical error: Order details missing after successful payment. Contact support.");
-                            setIsSuccess(false);
-                            setIsLoading(false);
-                        }
-                        // Note: setIsLoading(false) is moved to the finally() block of the inner fetch
-                        break;
-                    case 'processing':
-                        setMessage("Your payment is processing. We'll update you when payment is received.");
-                        setIsSuccess(null); // Indicate processing state
-                        setIsLoading(false); 
-                        break;
-                    case 'requires_payment_method':
-                        setMessage('Payment failed. Please try another payment method or contact support.');
-                        setIsSuccess(false);
-                        setIsLoading(false); 
-                        break;
-                    default:
-                        console.warn("Order Confirmation: Unhandled payment status:", data.status);
-                        setMessage('Something went wrong processing your payment. Please contact support.');
-                        setIsSuccess(false);
-                        setIsLoading(false); 
-                        break;
-                }
-            })
-            .catch(error => {
-                console.error("Order Confirmation: Error fetching payment status:", error);
-                setMessage(error.message || "Failed to retrieve payment status. Please contact support.");
-                setIsSuccess(false);
-                setIsLoading(false); // Ensure loading stops on fetch error
-            });
-
-        // Dependency array: only run when paymentIntentId changes (effectively once on mount)
-    }, [paymentIntentId]); // <-- Removed clearCart
-
-    // --- Removed previous useEffects related to stripeInstance and clientSecret ---
+    // --- REMOVED Effect 4: Save Address --- 
+    // This must now be handled server-side by the webhook after retrieving context
+    /*
+    useEffect(() => {
+        if (isSuccess === true && retrievedCheckoutData?.shouldSaveAddress === true ...) { ... }
+    }, [isSuccess, retrievedCheckoutData]);
+    */
 
     const renderContent = () => {
         if (isLoading) {
             return (
                 <div className="text-center py-16">
                     <div className="spinner border-t-4 border-indigo-500 border-solid rounded-full w-12 h-12 animate-spin mx-auto mb-4"></div>
-                    <p className="text-xl text-slate-600">Loading payment status...</p>
+                    <p className="text-xl text-slate-600">{message || 'Loading...'}</p>
                 </div>
             );
         }
 
-        // Display order creation error prominently if it occurred
+        // Use orderError state for specific order creation failures
         if (orderError) {
              return (
                 <div className="text-center py-16">
@@ -246,58 +217,42 @@ export const OrderConfirmation = () => {
             );
         }
 
+        // General success/failure rendering based on isSuccess and message
         return (
             <div className="text-center py-16">
-                <span className={`material-symbols-outlined text-7xl mb-4 ${
-                    isSuccess === true ? 'text-green-500' : 
-                    isSuccess === false ? 'text-red-500' : 
-                    'text-amber-500' // For processing state
-                }`}>
-                    {isSuccess === true ? 'check_circle' : 
-                     isSuccess === false ? 'error' : 
-                     'hourglass_top'}
-                </span>
-
-                <h1 className={`text-3xl md:text-4xl font-bold mb-4 ${
-                    isSuccess === true ? 'text-slate-900' : 
-                    isSuccess === false ? 'text-red-700' : 
-                    'text-slate-800'
-                }`}>
-                    {isSuccess === true ? 'Order Confirmed!' : 
-                     isSuccess === false ? 'Payment Failed' : 
-                     'Payment Processing'}
-                </h1>
-
-                <p className="text-xl md:text-2xl mb-8 text-slate-600">{message}</p>
-
-                {isSuccess === true && purchasedSubscription && (
-                    <p className="mt-4 text-slate-600 text-sm">
-                        Your subscription is active! You can manage it from your{' '}
-                        <Link to="/account/subscriptions" className="text-indigo-600 hover:underline">
-                            Account Page
-                        </Link>.
-                        {/* TODO: Create the /account/subscriptions page later */}
-                    </p>
+                {isSuccess === true && (
+                    <span className="material-symbols-outlined text-7xl text-emerald-500 mb-4">check_circle</span>
                 )}
-
-                {isSuccess !== null && ( // Only show buttons if not loading/initial state
-                    <div className="flex justify-center space-x-4 mt-12">
-                        <Link
-                            to="/flavors"
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
-                        >
-                            Continue Shopping
-                        </Link>
-                        {isSuccess === true && (
-                             <Link
-                                to="/profile" // Link to general order history
-                                className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
-                            >
-                                View Order History
-                            </Link>
-                        )}
-                    </div>
+                {isSuccess === false && (
+                     <span className="material-symbols-outlined text-7xl text-red-500 mb-4">error</span>
                 )}
+                <p className={`text-xl md:text-2xl font-semibold mb-8 ${isSuccess === false ? 'text-red-700' : 'text-slate-800'}`}>
+                    {message || (isSuccess === false ? 'An unknown error occurred.' : 'Processing...')}
+                </p>
+
+                 {/* --- REMOVED Order Summary --- */}
+                 {/* 
+                 {retrievedCheckoutData && (
+                     <div className="max-w-md mx-auto ..."> ... </div>
+                 )}
+                 */}
+
+                <div className="flex justify-center space-x-4">
+                    {isSuccess === true && (
+                         <Link
+                             to="/profile" 
+                             className="bg-slate-600 hover:bg-slate-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
+                         >
+                             View Account
+                         </Link>
+                    )}
+                    <Link
+                        to="/flavors"
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
+                    >
+                        Continue Shopping
+                    </Link>
+                </div>
             </div>
         );
     };

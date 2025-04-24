@@ -53,7 +53,7 @@ interface CheckoutData {
 }
 
 // --- Checkout Form Component (contains Stripe Elements) ---
-const StripeCheckoutForm = ({ clientSecret, checkoutData }: { clientSecret: string; checkoutData: CheckoutData }) => {
+const StripeCheckoutForm = ({ clientSecret, checkoutAttemptId }: { clientSecret: string; checkoutAttemptId: string }) => {
     const stripe = useStripe();
     const elements = useElements();
 
@@ -63,20 +63,19 @@ const StripeCheckoutForm = ({ clientSecret, checkoutData }: { clientSecret: stri
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
-        if (!stripe || !elements || !clientSecret) {
-            console.log("Stripe.js not loaded yet or missing client secret.");
+        if (!stripe || !elements || !clientSecret || !checkoutAttemptId) {
+            console.error("Stripe.js not loaded, missing client secret, OR missing checkoutAttemptId.");
             setMessage("Payment system not ready. Please wait or refresh.");
             return;
         }
 
-        // --- Save checkout data before confirming payment --- 
+        // --- Save ONLY checkoutAttemptId before confirming payment --- 
         try {
-            if (!checkoutData) { throw new Error("Missing checkout data."); }
-            sessionStorage.setItem('checkoutDataForConfirmation', JSON.stringify(checkoutData));
-            console.log("Checkout data saved to sessionStorage.");
+            sessionStorage.setItem('checkoutDataForConfirmation', checkoutAttemptId); // Store only the ID
+            console.log("Saved checkoutAttemptId to sessionStorage.");
         } catch (error) {
-            console.error("Error saving checkout data:", error);
-            setMessage("Error preparing order data. Please try again.");
+            console.error("Error saving checkoutAttemptId to sessionStorage:", error);
+            setMessage("Error preparing session data. Please try again.");
             return; 
         }
 
@@ -164,7 +163,8 @@ export const Checkout = () => {
 
     // Stripe State
     const [clientSecret, setClientSecret] = useState<string | null>(null);
-    const [isLoadingSecret, setIsLoadingSecret] = useState(false); // Only load when payment section is active
+    const [checkoutAttemptId, setCheckoutAttemptId] = useState<string | null>(null);
+    const [isLoadingSecret, setIsLoadingSecret] = useState(false);
     const [errorLoadingSecret, setErrorLoadingSecret] = useState<string | null>(null);
 
     // Form State
@@ -246,27 +246,40 @@ export const Checkout = () => {
         }
     }, [auth.user, auth.isLoading, activeSection]); // Dependencies: auth state and current section
 
-    // Effect to fetch Payment Intent client secret
+    // Effect to fetch Payment/Setup Intent client secret AND checkoutAttemptId
     useEffect(() => {
         if (
             activeSection === 'payment' && 
-            !clientSecret && 
+            !clientSecret && // Only fetch if we don't have one
+            !checkoutAttemptId && // AND we don't have an ID
             isShippingComplete && 
-            items.length > 0 
+            items.length > 0 &&
+            !isLoadingSecret // Avoid fetching if already loading
         ) {
             setIsLoadingSecret(true);
             setErrorLoadingSecret(null);
 
             const contactInfo = { email, phone };
             const shippingAddress = { fullName, address1, address2, city, state, postalCode, country };
+            // Prepare payload - ensure items match CartItem structure if needed by backend validation
             const payload = {
-                items: items, // Send full cart items from useCart
+                items: items.map(item => ({ // Ensure structure matches CartItem expectation if API depends on it
+                    priceId: item.priceId,
+                    productId: item.productId,
+                    name: item.name,
+                    price: item.price, // Sending price string
+                    quantity: item.quantity,
+                    imageSrc: item.imageSrc,
+                    isSubscription: item.isSubscription,
+                    recurringInterval: item.recurringInterval,
+                    // Explicitly adding slug if CartItem has it and API might use it (though likely not for intent creation)
+                    slug: item.slug 
+                })),
                 contactInfo: contactInfo,
                 shippingAddress: shippingAddress
             };
             // ---------------------------------------------
-            // --- Add console log to inspect payload ---
-            console.log("Checkout: Sending payload to /create-payment-intent:", JSON.stringify(payload, null, 2));
+            console.log("Checkout: Sending payload to /api/stripe/initiate-checkout:", JSON.stringify(payload, null, 2));
             // -----------------------------------------
 
             fetch('/api/stripe/initiate-checkout', {
@@ -282,23 +295,27 @@ export const Checkout = () => {
                 return res.json();
             })
             .then((data) => {
-                if (!data.clientSecret) {
-                    throw new Error('Client secret not received from server.');
+                if (!data.clientSecret || !data.checkoutAttemptId) { // <-- CHECK for both fields
+                    throw new Error('Client secret OR checkoutAttemptId not received from server.');
                 }
                 setClientSecret(data.clientSecret);
+                setCheckoutAttemptId(data.checkoutAttemptId); // <-- STORE the ID
+                console.log("Received clientSecret and checkoutAttemptId.");
             })
             .catch((error) => {
-                console.error("Failed to create payment intent:", error);
+                console.error("Failed to create payment/setup intent:", error);
                 setErrorLoadingSecret(error.message || "Failed to initialize payment.");
+                // Reset state if fetch fails
+                setClientSecret(null);
+                setCheckoutAttemptId(null);
             })
             .finally(() => {
                 setIsLoadingSecret(false);
             });
         }
-    // --- Corrected Dependency Array --- 
-	// Only re-run if the user enters the payment section, shipping is complete, or items change (e.g., cart cleared).
-	// Do NOT include individual form field states here.
-    }, [activeSection, isShippingComplete, items.length]); // Removed form state variables
+    // --- Dependencies --- 
+    // Add checkoutAttemptId to dependency array and include all form fields used in payload
+    }, [activeSection, isShippingComplete, items, clientSecret, checkoutAttemptId, isLoadingSecret, email, phone, fullName, address1, address2, city, state, postalCode, country]);
 
     // --- Effect to fetch Saved Addresses ---
     useEffect(() => {
@@ -621,16 +638,16 @@ export const Checkout = () => {
                             <div>
                                 {isLoadingSecret && <p className="text-center text-slate-500"><div className="spinner border-t-2 border-indigo-500 border-solid rounded-full w-5 h-5 animate-spin mx-auto mb-2"></div>Initializing payment...</p>}
                                 {errorLoadingSecret && <p className="text-center text-red-600">{errorLoadingSecret}</p>}
-                                {clientSecret && stripePromise && options && preparedCheckoutData && (
+                                {clientSecret && checkoutAttemptId && stripePromise && options && (
                                     <Elements options={options} stripe={stripePromise}>
                                         <StripeCheckoutForm 
                                             clientSecret={clientSecret} 
-                                            checkoutData={preparedCheckoutData}
+                                            checkoutAttemptId={checkoutAttemptId}
                                         />
                                     </Elements>
                                 )}
-                                {activeSection === 'payment' && isShippingComplete && !preparedCheckoutData && !isLoadingSecret && !errorLoadingSecret && (
-                                    <p className="text-center text-red-600">There was an error preparing your order data. Please review your cart or contact support.</p>
+                                {!clientSecret && !checkoutAttemptId && !isLoadingSecret && !errorLoadingSecret && (
+                                    <p className="text-center text-red-600">Failed to initialize payment session. Please refresh or contact support.</p>
                                 )}
                             </div>
                         )}
@@ -759,16 +776,19 @@ export const Checkout = () => {
                              {/* Show Stripe form IF this section is active AND previous is complete */} 
                             {activeSection === 'payment' && isShippingComplete ? (
                                 <div>
-                                    {/* ... Loading/Error/Stripe Elements logic ... */} 
+                                    {/* ... Loading/Error logic ... */} 
                                     {isLoadingSecret && <p className="text-center text-slate-500"><div className="spinner border-t-2 border-indigo-500 border-solid rounded-full w-5 h-5 animate-spin mx-auto mb-2"></div>Initializing payment...</p>}
                                     {errorLoadingSecret && <p className="text-center text-red-600">{errorLoadingSecret}</p>}
-                                    {clientSecret && stripePromise && options && preparedCheckoutData && (
+                                    {clientSecret && checkoutAttemptId && stripePromise && options && (
                                         <Elements options={options} stripe={stripePromise}>
-                                            <StripeCheckoutForm clientSecret={clientSecret} checkoutData={preparedCheckoutData} />
+                                            <StripeCheckoutForm 
+                                                clientSecret={clientSecret} 
+                                                checkoutAttemptId={checkoutAttemptId}
+                                            />
                                         </Elements>
                                     )}
-                                    {!preparedCheckoutData && !isLoadingSecret && !errorLoadingSecret && (
-                                        <p className="text-center text-red-600">There was an error preparing your order data. Please review your cart or contact support.</p>
+                                    {!clientSecret && !checkoutAttemptId && !isLoadingSecret && !errorLoadingSecret && (
+                                        <p className="text-center text-red-600">Failed to initialize payment session. Please refresh or contact support.</p>
                                     )}
                                 </div>
                             ) : null} {/* Don't show payment form if prerequisites not met */} 

@@ -52,7 +52,10 @@ export const getStripeProducts = async (stripe: Stripe): Promise<Flavor[]> => {
                 packSize: price.metadata?.packSize || null,
                 unitDescription: price.metadata?.unitDescription || null,
                 displayName: price.metadata?.displayName || null,
-                isDefault: product.default_price === price.id
+                isDefault: product.default_price === price.id,
+                isSubscription: price.recurring !== null,
+                recurringInterval: price.recurring?.interval ?? null,
+                subscriptionId: price.metadata?.subscriptionId || null,
             }));
 
             // 5. Construct the Flavor object

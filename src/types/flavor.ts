@@ -6,6 +6,10 @@ export interface PriceOption {
     unitDescription: string | null; // e.g., 'Pint', '3-Pack' (from Price metadata)
     displayName: string | null; // New: Display name from Price metadata
     isDefault: boolean;         // New: Flag indicating if this is the default price for the product
+    // --- Fields relevant for Subscription UI V2 ---
+    isSubscription: boolean;    // Determined by price.recurring != null on server
+    recurringInterval: string | null; // e.g., 'month', 'week' from price.recurring
+    subscriptionId: string | null; // ID of corresponding subscription price (from metadata on one-time price)
 }
 
 export interface Flavor {

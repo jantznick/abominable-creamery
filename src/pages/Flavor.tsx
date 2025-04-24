@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom';
 // import { flavors as staticFlavors } from '../utils/content'; // Remove static import
 import { useProducts } from '../context/ProductContext'; // Import product context hook
@@ -16,26 +16,75 @@ const colors: Record<number, string> = {
 	2: 'blue'
 };
 
+// Type for purchase selection
+// type PurchaseType = 'one-time' | 'subscription';
+
 export const Flavor = () => {
-	const [quantity, setQuantity] = useState(1); 
-	const [selectedPrice, setSelectedPrice] = useState<PriceOption | null>(null); // State for selected price option
+	const [quantity, setQuantity] = useState(1);
+	const [selectedPriceId, setSelectedPriceId] = useState<string | null>(null); // ID of the selected BASE (non-sub) price option
+	const [isSubscribed, setIsSubscribed] = useState<boolean>(false); // Is the *currently selected* option subscribed?
+	// const [subscriptionSelections, setSubscriptionSelections] = useState<{ [nonSubPriceId: string]: boolean }>({}); // REMOVED
 	// Get slug from URL params instead of flavorId
-	const { slug } = useParams<{ slug: string }>(); 
-	const { addItem } = useCart(); 
+	const { slug } = useParams<{ slug: string }>();
+	const { addItem } = useCart();
 	const { flavors } = useProducts(); // Get flavors from context
 
 	// Find the flavor from context data using the slug
 	const flavorData: FlavorType | undefined = flavors.find(f => f.slug === slug);
 
-	// Effect to set the default selected price when flavorData loads/changes
-	useEffect(() => {
-		if (flavorData && flavorData.prices.length > 0) {
-			// Select the default price option, or fall back to the first one
-			setSelectedPrice(flavorData.prices.find(p => p.isDefault) || flavorData.prices[0]); 
-		} else {
-			setSelectedPrice(null);
-		}
+	// Create a map for quick price lookup by ID and filter displayable (non-sub) prices
+	const { priceMap, displayablePrices } = useMemo(() => {
+		if (!flavorData) return { priceMap: {}, displayablePrices: [] };
+		const map: { [priceId: string]: PriceOption } = {};
+		const displayable: PriceOption[] = [];
+		flavorData.prices.forEach(p => {
+			map[p.priceId] = p;
+			if (!p.isSubscription) {
+				displayable.push(p);
+			}
+		});
+		// Sort displayable prices (e.g., default first)
+		displayable.sort((a, b) => {
+			if (a.isDefault && !b.isDefault) return -1;
+			if (!a.isDefault && b.isDefault) return 1;
+			// Secondary sort could go here (e.g., parseFloat(a.price) - parseFloat(b.price))
+			return 0;
+		});
+		return { priceMap: map, displayablePrices: displayable };
 	}, [flavorData]);
+
+	// Determine the currently selected effective PriceOption based on selectedPriceId and isSubscribed flag
+	const selectedEffectivePrice: PriceOption | null = useMemo(() => {
+		if (!selectedPriceId || !priceMap[selectedPriceId]) {
+			return null; // No base price selected
+		}
+		const baseSelectedPrice = priceMap[selectedPriceId];
+		
+		// Check if the user wants to subscribe to this *selected* base price
+		if (isSubscribed && baseSelectedPrice.subscriptionId && priceMap[baseSelectedPrice.subscriptionId]) {
+			// Return the corresponding subscription price object
+			return priceMap[baseSelectedPrice.subscriptionId];
+		}
+		
+		// Otherwise, return the base (non-subscription) price object
+		return baseSelectedPrice;
+	}, [selectedPriceId, isSubscribed, priceMap]);
+
+	// Effect to set the default selected radio button when flavor/prices load
+	useEffect(() => {
+		if (displayablePrices.length > 0) {
+			const defaultPrice = displayablePrices.find(p => p.isDefault) || displayablePrices[0];
+			setSelectedPriceId(defaultPrice.priceId);
+			setIsSubscribed(false); // Default to not subscribed
+		} else {
+			setSelectedPriceId(null);
+			setIsSubscribed(false);
+		}
+		setQuantity(1);
+	}, [displayablePrices]);
+
+	// Handler for changing purchase type
+	// const handlePurchaseTypeChange = (type: PurchaseType) => { ... };
 
 	// Handle flavor not found or context still loading
 	if (!flavorData) {
@@ -57,33 +106,72 @@ export const Flavor = () => {
 		setQuantity(prev => Math.max(1, prev + amount)); 
 	};
 
-	const handlePriceSelectionChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-		const priceId = event.target.value;
-		const newSelectedPrice = flavorData.prices.find(p => p.priceId === priceId) || null;
-		setSelectedPrice(newSelectedPrice);
-	};
+	// Handler for Radio Button Selection Change
+	const handlePriceSelectionChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+		setSelectedPriceId(event.target.value);
+		setIsSubscribed(false); // Selecting radio always defaults to one-time
+	}, []);
+
+	// Handler for Subscription Checkbox Change
+	const handleSubscriptionCheckboxChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+		const { value: nonSubPriceId, checked } = event.target;
+		if (checked) {
+			// Select the corresponding radio button AND set subscription flag
+			setSelectedPriceId(nonSubPriceId);
+			setIsSubscribed(true);
+		} else {
+			// Just uncheck the subscription, keep the same radio selected
+			// (Only relevant if the currently selected radio matches the checkbox being unchecked)
+			if (selectedPriceId === nonSubPriceId) {
+				setIsSubscribed(false);
+			}
+			// If a different radio is selected, this uncheck doesn't change the state
+		}
+	}, [selectedPriceId]);
 
 	const handleAddToCart = () => {
-		// Ensure flavor and a price option are selected
-		if (!flavorData || !selectedPrice) return; 
+		// Use the calculated selectedEffectivePrice
+		if (!flavorData || !selectedEffectivePrice) return;
 
-		// Ensure addItem is called with the correct payload structure (price as string)
 		const itemPayload: AddItemPayload = {
-			priceId: selectedPrice.priceId,
+			priceId: selectedEffectivePrice.priceId,
 			productId: flavorData.id,
 			slug: flavorData.slug,
-			name: `${flavorData.name} ${selectedPrice.unitDescription ? `(${selectedPrice.unitDescription})` : ''}`,
-			price: selectedPrice.price, // Pass price as string now
-			imageSrc: flavorData.imageSrc || undefined // Ensure undefined if null
+			name: `${flavorData.name} ${selectedEffectivePrice.unitDescription ? `(${selectedEffectivePrice.unitDescription})` : ''}${selectedEffectivePrice.isSubscription ? ' (Subscription)' : ''}`,
+			price: selectedEffectivePrice.price,
+			imageSrc: flavorData.imageSrc || undefined,
+			isSubscription: selectedEffectivePrice.isSubscription,
+			recurringInterval: selectedEffectivePrice.recurringInterval,
 		};
 		addItem(itemPayload, quantity);
 
-		console.log(`Adding ${quantity} of ${flavorData.name} (${selectedPrice.unitDescription}) with price ID ${selectedPrice.priceId} to cart`);
+		console.log(`Adding ${quantity} of ${itemPayload.name} with price ID ${itemPayload.priceId} to cart. Subscription: ${itemPayload.isSubscription}`);
 	};
 
 	// Determine image source
 	const randomNum = Math.floor(Math.random() * 3);
 	const imageToDisplay = flavorData.imageSrc || `/images/${colors[randomNum]}-soon.png`;
+
+	// Helper function to calculate savings based on original price and sub price
+	const getSubscriptionSavings = (originalPriceOpt: PriceOption, subPriceOpt: PriceOption): { originalPrice?: string; savingsPercent?: number } => {
+		if (!originalPriceOpt || !subPriceOpt) {
+			return {};
+		}
+
+		const subPriceNum = parseFloat(subPriceOpt.price);
+		const oneTimePriceNum = parseFloat(originalPriceOpt.price);
+
+		if (isNaN(subPriceNum) || isNaN(oneTimePriceNum) || oneTimePriceNum <= subPriceNum) {
+			console.warn(`Could not calculate savings. Sub price: ${subPriceOpt.price}, Original price: ${originalPriceOpt.price}`);
+			return {};
+		}
+
+		const savingsPercent = Math.round(((oneTimePriceNum - subPriceNum) / oneTimePriceNum) * 100);
+		return {
+			originalPrice: originalPriceOpt.price,
+			savingsPercent: savingsPercent,
+		};
+	};
 
 	return (
 		<div className='grow bg-slate-50 px-4 py-8 md:py-16'>
@@ -104,35 +192,86 @@ export const Flavor = () => {
 					{flavorData.simpleName && <p className="text-md text-slate-500 -mt-3 mb-2">({flavorData.simpleName})</p>}
 					<p className="text-base text-slate-700 leading-relaxed">{flavorData.description || 'No description available.'}</p>
 
-					{/* Price Options - Using Radio Buttons */}
+					{/* REMOVED Purchase Type Selection */}
+					{/* {oneTimePrices.length > 0 && hasSubscriptionOptions && ( ... )} */}
+
+					{/* Price Options - Render only non-subscription, add checkbox */}
 					<div className="space-y-2 pt-3">
 						<h3 className="text-lg font-medium text-slate-800">Select Option:</h3>
-						{[...flavorData.prices] // Create a shallow copy to avoid mutating original data
-							.sort((a, b) => {
-								// Prioritize the default price
-								if (a.isDefault && !b.isDefault) return -1;
-								if (!a.isDefault && b.isDefault) return 1;
-								// Optional: Add secondary sort logic here if needed (e.g., by price)
-								return 0; // Maintain original order for non-defaults
-							})
-							.map((priceOpt) => (
-							<label key={priceOpt.priceId} className="flex items-center space-x-3 p-3 border border-slate-200 rounded-md hover:bg-slate-50 cursor-pointer transition-colors duration-150">
-								<input
-									type="radio"
-									name={`priceOption-${flavorData.id}`}
-									value={priceOpt.priceId}
-									checked={selectedPrice?.priceId === priceOpt.priceId}
-									onChange={handlePriceSelectionChange}
-									className="form-radio h-5 w-5 text-amber-600 focus:ring-amber-500 border-slate-300"
-								/>
-								<span className="flex-grow">
-									<span className="block text-md font-medium text-slate-700">{priceOpt.displayName || priceOpt.unitDescription || 'Standard'}</span>
-									{/* Optional: Add packSize info if needed */}
-								</span>
-								<span className="text-xl font-semibold text-amber-600">${priceOpt.price}</span>
-							</label>
-						))}
-						{flavorData.prices.length === 0 && <p className="text-red-600">No purchase options available.</p>}
+						{displayablePrices.map((priceOpt) => {
+							// Determine if subscription is possible for this option
+							const canSubscribe = !!(priceOpt.subscriptionId && priceMap[priceOpt.subscriptionId]);
+							// Determine if this specific option IS the one currently subscribed
+							const isThisOptionSubscribed = isSubscribed && selectedPriceId === priceOpt.priceId;
+							
+							const subPriceOpt = canSubscribe ? priceMap[priceOpt.subscriptionId!] : null;
+
+							// Get the price/details to actually display based on subscription state *for this option*
+							const effectivePrice = isThisOptionSubscribed && subPriceOpt ? subPriceOpt.price : priceOpt.price;
+							const savings = isThisOptionSubscribed && subPriceOpt ? getSubscriptionSavings(priceOpt, subPriceOpt) : null;
+							const interval = isThisOptionSubscribed && subPriceOpt ? subPriceOpt.recurringInterval : null;
+
+							return (
+								<div key={priceOpt.priceId} className={`p-3 border rounded-md transition-colors duration-150 ${selectedPriceId === priceOpt.priceId ? 'border-indigo-500 ring-1 ring-indigo-500 bg-indigo-50' : 'border-slate-200'}`}>
+									<label className="flex items-center space-x-3 cursor-pointer">
+										<input
+											type="radio"
+											name={`priceOption-${flavorData.id}`}
+											value={priceOpt.priceId}
+											checked={selectedPriceId === priceOpt.priceId}
+											onChange={handlePriceSelectionChange}
+											className="form-radio h-5 w-5 text-amber-600 focus:ring-amber-500 border-slate-300 mt-1 self-start flex-shrink-0"
+										/>
+										<div className="flex-grow flex items-center justify-between">
+											<span className="mr-3">
+												<span className="block text-md font-medium text-slate-700">
+													{priceOpt.displayName || priceOpt.unitDescription || 'Standard'}
+												</span>
+											</span>
+											<div className="flex items-baseline space-x-2 flex-shrink-0">
+												<span className="text-xl font-semibold text-amber-600">
+													${effectivePrice}
+												</span>
+												{/* Show interval only if this option is subscribed */} 
+												{isThisOptionSubscribed && interval && (
+													<span className="text-xs font-normal text-slate-500">/ {interval}</span>
+												)}
+												{/* Show savings only if this option is subscribed */} 
+												{isThisOptionSubscribed && savings?.originalPrice && savings?.savingsPercent && (
+													<span className="text-sm text-slate-500 line-through">
+														${savings.originalPrice}
+													</span>
+												)}
+											</div>
+										</div>
+									</label>
+
+									{/* Subscription Checkbox Area (only if possible) */} 
+									{canSubscribe && (
+										<div className="mt-2 pl-8"> 
+											<label className="inline-flex items-center cursor-pointer text-sm">
+												<input
+													type="checkbox"
+													value={priceOpt.priceId} // Value identifies which non-sub price this belongs to
+													// Checked state depends on whether this option is selected AND isSubscribed is true
+													checked={selectedPriceId === priceOpt.priceId && isSubscribed}
+													onChange={handleSubscriptionCheckboxChange}
+													className="form-checkbox h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 mr-2"
+												/>
+												<span className="text-slate-700">Subscribe & Save</span>
+												{/* Calculate potential savings even if not checked, to display next to checkbox */}
+												{(subPriceOpt && getSubscriptionSavings(priceOpt, subPriceOpt).savingsPercent) ? (
+													<span className="ml-2 text-sm text-green-600 font-semibold">
+														({getSubscriptionSavings(priceOpt, subPriceOpt).savingsPercent}% off)
+													</span>
+												) : null}
+											</label>
+										</div>
+									)}
+								</div>
+							);
+						})}
+						{displayablePrices.length === 0 && <p className="text-red-600">No purchase options available.</p>}
 					</div>
 
 					{/* Ingredients/Allergens */}
@@ -161,12 +300,12 @@ export const Flavor = () => {
 					<div className="pt-5">
 						<button
 							onClick={handleAddToCart}
-							// Disable if no price is selected or no prices available
-							disabled={!flavorData || !selectedPrice || flavorData.prices.length === 0}
-							className={`w-full md:w-auto bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300 ease-in-out flex items-center justify-center space-x-2 shadow hover:shadow-md ${!flavorData || !selectedPrice || flavorData.prices.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+							// Disable if no effective price is selected or no displayable prices available
+							disabled={!flavorData || !selectedEffectivePrice || displayablePrices.length === 0}
+							className={`w-full md:w-auto bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300 ease-in-out flex items-center justify-center space-x-2 shadow hover:shadow-md ${!flavorData || !selectedEffectivePrice || displayablePrices.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
 						>
 							<span className="material-symbols-outlined">add_shopping_cart</span>
-							<span>Add to Cart</span>
+							<span>{selectedEffectivePrice?.isSubscription ? 'Add Subscription to Cart' : 'Add to Cart'}</span>
 						</button>
 					</div>
 

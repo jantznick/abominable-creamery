@@ -11,6 +11,8 @@ export interface CartItem {
     price: string;      // Price per unit (string format, e.g., "5.99")
     quantity: number;   // Number of units in the cart
     imageSrc?: string;  // Optional image source (product image)
+    isSubscription?: boolean; // New: Optional flag for subscriptions
+    recurringInterval?: string | null; // New: Optional interval if subscription
 }
 
 // Update payload to include productId and slug
@@ -19,8 +21,10 @@ export interface AddItemPayload {
     productId: string;
     slug: string | null;
     name: string;
-    price: string; 
+    price: string;
     imageSrc?: string;
+    isSubscription?: boolean; // New: Optional flag for subscriptions
+    recurringInterval?: string | null; // New: Optional interval if subscription
 }
 
 interface CartContextState {
@@ -90,21 +94,24 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
         setItems(prevItems => {
             const existingItem = prevItems.find(item => item.priceId === itemToAdd.priceId);
             if (existingItem) {
+                // IMPORTANT: Ensure we don't change subscription status when adding more quantity
                 return prevItems.map(item =>
                     item.priceId === itemToAdd.priceId
-                        ? { ...item, quantity: item.quantity + quantity }
+                        ? { ...item, quantity: item.quantity + quantity } // Only update quantity
                         : item
                 );
             } else {
-                // Add new item, including slug
+                // Add new item, including slug and subscription details
                 const newItem: CartItem = {
                     priceId: itemToAdd.priceId,
-                    productId: itemToAdd.productId, 
+                    productId: itemToAdd.productId,
                     slug: itemToAdd.slug, // Store slug
                     name: itemToAdd.name,
                     price: itemToAdd.price,
                     quantity: quantity,
-                    imageSrc: itemToAdd.imageSrc
+                    imageSrc: itemToAdd.imageSrc,
+                    isSubscription: itemToAdd.isSubscription, // Store subscription flag
+                    recurringInterval: itemToAdd.recurringInterval, // Store interval
                 };
                 return [...prevItems, newItem];
             }

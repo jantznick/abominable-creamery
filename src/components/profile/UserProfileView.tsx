@@ -5,6 +5,7 @@ import { OrderCard } from '../orders/OrderCard'; // Import the new component
 import AddressManager from './AddressManager'; // Import AddressManager
 import UserProfileModal from './UserProfileModal'; // Import profile modal
 import { formatPhoneNumber } from '../../utils/formatting'; // Import the new formatter
+import SubscriptionList from './SubscriptionList'; // Import SubscriptionList
 
 // Define props required by this component
 interface UserProfileViewProps {
@@ -74,6 +75,11 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
                     </div>
                 )}
             </div>
+
+            {/* --- Subscription Management Section --- */}
+            {/* Render this section regardless of orders */}
+            <SubscriptionList />
+            {/* ------------------------------------ */}
 
             {/* Address Management Section */}
             <div className="mt-8"> {/* Added margin-top consistent with other sections */}

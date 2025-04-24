@@ -290,7 +290,7 @@ export const OrderConfirmation = () => {
                         </Link>
                         {isSuccess === true && (
                              <Link
-                                to="/account/orders" // Link to general order history
+                                to="/profile" // Link to general order history
                                 className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
                             >
                                 View Order History

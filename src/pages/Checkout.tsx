@@ -63,52 +63,68 @@ const StripeCheckoutForm = ({ clientSecret, checkoutData }: { clientSecret: stri
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
 
-        if (!stripe || !elements) {
-            console.log("Stripe.js not loaded yet");
+        if (!stripe || !elements || !clientSecret) {
+            console.log("Stripe.js not loaded yet or missing client secret.");
+            setMessage("Payment system not ready. Please wait or refresh.");
             return;
         }
 
         // --- Save checkout data before confirming payment --- 
         try {
-            // Ensure essential data is present before saving
-            if (!checkoutData || !checkoutData.items || checkoutData.items.length === 0 || !checkoutData.shippingAddress || !checkoutData.contactInfo) {
-                throw new Error("Missing essential checkout data for saving.");
-            }
+            if (!checkoutData) { throw new Error("Missing checkout data."); }
             sessionStorage.setItem('checkoutDataForConfirmation', JSON.stringify(checkoutData));
             console.log("Checkout data saved to sessionStorage.");
         } catch (error) {
-            console.error("Error saving checkout data to sessionStorage:", error);
-            setMessage("Error preparing order data. Please try again or contact support.");
-            // Optionally prevent payment confirmation if saving fails critically
-            // return; 
+            console.error("Error saving checkout data:", error);
+            setMessage("Error preparing order data. Please try again.");
+            return; 
         }
-        // --- End save checkout data ---
 
         setIsLoading(true);
-        setMessage(null); // Clear previous messages
+        setMessage(null); 
 
-        // Proceed with payment confirmation
-        const { error } = await stripe.confirmPayment({
-            elements,
-            confirmParams: {
-                return_url: `${window.location.origin}/order-confirmation`,
-            },
-        });
+        let error: { message?: string, type?: string } | null = null;
 
-        // This point will only be reached if there is an immediate error when
-        // confirming the payment. Otherwise, your customer will be redirected to
-        // your `return_url`. For some payment methods like iDEAL, your customer will
-        // be redirected to an intermediate site first to authorize the payment, then
-        // redirected to the `return_url`.
-        if (error.type === "card_error" || error.type === "validation_error") {
-            setMessage(error.message || "An unexpected error occurred.");
+        // --- Conditionally Confirm Setup or Payment --- 
+        if (clientSecret.startsWith('seti_')) {
+            console.log("Confirming SetupIntent...");
+            const { error: setupError } = await stripe.confirmSetup({
+                elements,
+                confirmParams: {
+                    return_url: `${window.location.origin}/order-confirmation`,
+                },
+            });
+            error = setupError || null;
+
+        } else if (clientSecret.startsWith('pi_')) {
+            console.log("Confirming PaymentIntent...");
+            const { error: paymentError } = await stripe.confirmPayment({
+                elements,
+                confirmParams: {
+                    return_url: `${window.location.origin}/order-confirmation`,
+                },
+            });
+            error = paymentError || null;
         } else {
-            setMessage("An unexpected error occurred.");
+            console.error("Invalid client secret format:", clientSecret);
+            setMessage("Invalid payment session. Please try again.");
+            setIsLoading(false);
+            return;
+        }
+        // -------------------------------------------
+
+        // Handle result
+        if (error) {
+            if (error.type === "card_error" || error.type === "validation_error") {
+                setMessage(error.message || "An unexpected payment error occurred.");
+            } else {
+                setMessage("An unexpected payment error occurred.");
+            }
+        } else {
+            console.log("Payment/Setup confirmed client-side (likely redirecting)...");
         }
 
         setIsLoading(false);
-        // Note: If successful, the user is redirected. We don't clear cart or navigate here directly.
-        // Cart clearing and navigation should happen on the confirmation page after checking payment status.
     };
 
     return (
@@ -241,20 +257,21 @@ export const Checkout = () => {
             setIsLoadingSecret(true);
             setErrorLoadingSecret(null);
 
-            // --- Prepare data payload for the backend --- 
             const contactInfo = { email, phone };
             const shippingAddress = { fullName, address1, address2, city, state, postalCode, country };
             const payload = {
-                items: items, // Send full cart items
+                items: items, // Send full cart items from useCart
                 contactInfo: contactInfo,
                 shippingAddress: shippingAddress
             };
             // ---------------------------------------------
+            // --- Add console log to inspect payload ---
+            console.log("Checkout: Sending payload to /create-payment-intent:", JSON.stringify(payload, null, 2));
+            // -----------------------------------------
 
-            fetch('/api/stripe/create-payment-intent', {
+            fetch('/api/stripe/initiate-checkout', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                // Send items AND contact/shipping info
                 body: JSON.stringify(payload)
             })
             .then(async (res) => {
@@ -278,9 +295,10 @@ export const Checkout = () => {
                 setIsLoadingSecret(false);
             });
         }
-    // Include all form state variables used in the payload as dependencies
-    }, [activeSection, clientSecret, isShippingComplete, items, 
-        email, phone, fullName, address1, address2, city, state, postalCode, country]); 
+    // --- Corrected Dependency Array --- 
+	// Only re-run if the user enters the payment section, shipping is complete, or items change (e.g., cart cleared).
+	// Do NOT include individual form field states here.
+    }, [activeSection, isShippingComplete, items.length]); // Removed form state variables
 
     // --- Effect to fetch Saved Addresses ---
     useEffect(() => {

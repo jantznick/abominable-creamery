@@ -58,7 +58,7 @@ model Order {
   
   // Relation to Subscription (if this order is a renewal)
   subscriptionId String?     
-  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+  subscription   Subscription? @relation("SubscriptionRenewals", fields: [subscriptionId], references: [id])
 
   totalAmount Decimal     @db.Decimal(10, 2) // Example precision: 10 total digits, 2 decimal places
   status      OrderStatus @default(PENDING)
@@ -133,18 +133,32 @@ model Address {
 
 // --- New Subscription Model ---
 model Subscription {
-  id                  String      @id @default(cuid())
-  userId              Int         // Changed to Int to match User ID type
-  user                User        @relation(fields: [userId], references: [id])
-  stripeSubscriptionId String      @unique // From Stripe event checkout.session.completed -> subscription
-  stripePriceId       String      // The ID of the recurring Stripe Price object
-  status              String      // e.g., "active", "canceled", "incomplete", etc. (Matches Stripe statuses)
-  interval            String      // e.g., "month", "week"
-  currentPeriodEnd    DateTime    // From Stripe event
-  cancelAtPeriodEnd   Boolean     @default(false)
-  renewalOrders       Order[]     // Relation back to renewal Orders
-  createdAt           DateTime    @default(now())
-  updatedAt           DateTime    @updatedAt
+  id                   String   @id @default(cuid())
+  userId               Int
+  stripeSubscriptionId String   @unique
+  stripePriceId        String   // Price ID for the subscription item
+  status               String   // e.g., active, trialing, past_due, canceled, incomplete
+  interval             String   // e.g., month, year
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean  @default(false)
+  collectionPaused     Boolean  @default(false)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id])
+  renewalOrders Order[] @relation("SubscriptionRenewals")
 
   @@index([userId])
+  @@index([stripeSubscriptionId])
 }
+
+// --- Removed Model for Temporary Checkout Context ---
+// model PendingOrderContext {
+//   paymentIntentId String @id @unique
+//   userId             Int?
+//   stripeSubscriptionId String
+//   stripeInvoiceId    String 
+//   cartDetails        String 
+//   createdAt          DateTime  @default(now())
+//   @@index([createdAt])
+// }

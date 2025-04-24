@@ -16,6 +16,7 @@ import { AuthProvider } from './src/context/AuthContext';
 import { ProductProvider } from './src/context/ProductContext';
 import { getStripeProducts } from './src/server/utils/stripeProducts';
 import { Flavor } from './src/types/flavor';
+import subscriptionsRouter from './src/server/routes/subscriptions';
 
 import AppRoutes from './src/routes/index';
 import AppWrapper from './src/AppWrapper';
@@ -58,6 +59,7 @@ app.use(session({
 	}
 }));
 
+app.use('/api/stripe', stripeRouter);
 app.use(express.static('public'));
 app.use(express.json());
 
@@ -69,9 +71,9 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 
 app.use('/api/auth', authRouter);
 app.use('/api/orders', orderRouter);
-app.use('/api/stripe', stripeRouter);
 app.use('/api/addresses', addressRouter);
 app.use('/api/users', userRouter);
+app.use('/api/subscriptions', subscriptionsRouter);
 
 app.get('*', async (req: Request, res: Response) => {
 	if (!stripe) {

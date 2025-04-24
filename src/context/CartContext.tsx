@@ -8,6 +8,7 @@ export interface CartItem {
     productId: string;  // Stripe Product ID
     slug: string | null; // Slug for linking
     name: string;       // Name of the item (including pack description, e.g., "Vanilla (Pint)")
+    productName?: string; // <-- Add this field to align with metadata 
     price: string;      // Price per unit (string format, e.g., "5.99")
     quantity: number;   // Number of units in the cart
     imageSrc?: string;  // Optional image source (product image)

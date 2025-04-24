@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import prisma from '../db'; // Adjusted path again
 import { CartItem } from '../../../src/context/CartContext'; // Adjust path as needed
 import { Decimal } from '@prisma/client/runtime/library'; // Import Decimal
+import { SessionUser } from '../types'; // Import SessionUser from the shared types file
 
 // Load environment variables
 dotenv.config();
@@ -16,17 +17,8 @@ if (!stripeSecretKey) {
 const stripe = stripeSecretKey ? new Stripe(stripeSecretKey, { apiVersion: '2025-03-31.basil' }) : null;
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET; // Define secret here
 
-// Define expected type for the user object in the session
-interface SessionUser {
-	id: number;
-	email: string;
-	name?: string | null;
-	stripeCustomerId?: string | null;
-	// Add other relevant user fields if needed
-}
-
-// Define expected type for /create-payment-intent request body
-interface CreatePaymentIntentRequest {
+// Define expected type for /initiate-checkout request body
+interface InitiateCheckoutRequest {
 	items: CartItem[];
 	contactInfo: { email: string; phone?: string };
 	shippingAddress: {
@@ -42,14 +34,12 @@ interface CreatePaymentIntentRequest {
 
 const router: Router = express.Router();
 
-// --- Middleware to handle raw body for webhook verification ---
-// This needs to run *before* express.json() for the webhook route specifically.
-// Consider moving webhook logic to its own file or applying middleware selectively.
+// Middleware for raw body specific to webhook
 const stripeWebhookMiddleware = express.raw({ type: 'application/json' });
 
 // GET /api/stripe/payment-intent/:paymentIntentId
 // Retrieves the status of a Stripe PaymentIntent
-router.get('/payment-intent/:paymentIntentId', async (req: Request, res: Response) => {
+router.get('/payment-intent/:paymentIntentId', express.json(), async (req: Request, res: Response) => {
     if (!stripe) {
         return res.status(500).json({ error: 'Stripe service is not available.' });
     }
@@ -83,113 +73,97 @@ router.get('/payment-intent/:paymentIntentId', async (req: Request, res: Respons
     }
 });
 
-// POST /api/stripe/create-payment-intent - Create a new PaymentIntent
-router.post('/create-payment-intent', async (req: Request, res: Response) => {
+// POST /api/stripe/initiate-checkout - Creates SetupIntent (for subs) or PaymentIntent (one-time)
+router.post('/initiate-checkout', express.json(), async (req: Request, res: Response) => {
 	if (!stripe) {
 		return res.status(500).send({ error: 'Stripe is not configured.' });
 	}
 
-	const { items, contactInfo, shippingAddress } = req.body as CreatePaymentIntentRequest;
+	const { items, contactInfo, shippingAddress } = req.body as InitiateCheckoutRequest;
 	const sessionUser = req.session.user as SessionUser | undefined;
 
+	// --- Basic Validations (keep existing) ---
 	if (!items || !Array.isArray(items) || items.length === 0 || !contactInfo || !shippingAddress) {
 		return res.status(400).send({ error: 'Invalid request body: missing items, contact, or shipping info.' });
 	}
-
-	// Basic validation for contact/shipping (can be expanded)
 	if (!contactInfo.email || !shippingAddress.fullName || !shippingAddress.address1 ||
 		!shippingAddress.city || !shippingAddress.state || !shippingAddress.postalCode || !shippingAddress.country) {
 		return res.status(400).send({ error: 'Missing required contact or shipping fields.' });
 	}
 
-	let totalAmount = 0;
+	let totalAmountCent = 0; // Use cents for Payment Intent amount
 	let containsSubscription = false;
-	const metadataCartItems: any[] = []; // For storing structured cart data in metadata
+	const detailedCartItems: any[] = []; // For metadata context
 
 	try {
-		// Calculate total, check for subscriptions, and build metadata structure
+		// --- Step 1: Validate items, calculate total, check for subscriptions ---
 		for (const item of items) {
-			// Basic validation
-			if (!item.priceId || typeof item.priceId !== 'string' || 
-			    !item.quantity || typeof item.quantity !== 'number' || item.quantity <= 0) {
+			// Keep existing validation...
+			if (!item.priceId || typeof item.priceId !== 'string' ||
+				!item.quantity || typeof item.quantity !== 'number' || item.quantity <= 0 ||
+				!item.productId || typeof item.productId !== 'string' ||
+				!item.name || typeof item.name !== 'string' ||
+				!item.price || isNaN(parseFloat(item.price))
+			) {
 				console.warn("Invalid cart item structure received:", item);
-				// Consider sending a more specific error
 				return res.status(400).send({ error: `Invalid item data passed.` });
 			}
 
-			// Fetch price from Stripe to ensure validity and get amount
-			const price = await stripe.prices.retrieve(item.priceId);
-
-			if (!price || !price.active || !price.unit_amount) {
-				console.warn(`Price ID ${item.priceId} not found, inactive, or has no amount.`);
+			const stripePrice = await stripe.prices.retrieve(item.priceId);
+			if (!stripePrice || !stripePrice.active || !stripePrice.unit_amount) {
 				return res.status(400).send({ error: `Invalid or inactive price ID: ${item.priceId}` });
 			}
 
-			// --- Subscription Check --- 
 			if (item.isSubscription) {
 				containsSubscription = true;
-				// Ensure user is logged in (now checking asserted type)
-				if (!sessionUser || !sessionUser.id || !sessionUser.email) {
+				if (!sessionUser || !sessionUser.id) {
 					return res.status(401).send({ error: 'Login is required to purchase subscriptions.' });
 				}
-				// Ensure the price IS actually recurring on Stripe side
-				if (!price.recurring) {
-					console.error(`Cart item ${item.priceId} marked as subscription but Stripe price is not recurring.`);
-					return res.status(400).send({ error: `Configuration error for price ID: ${item.priceId}` });
+				if (!stripePrice.recurring) {
+					return res.status(400).send({ error: `Configuration error: Price ${item.priceId} is not recurring.` });
 				}
+				item.recurringInterval = item.recurringInterval ?? stripePrice.recurring?.interval ?? null;
 			}
 
-			totalAmount += (price.unit_amount ?? 0) * item.quantity;
-			metadataCartItems.push({
+			totalAmountCent += (stripePrice.unit_amount ?? 0) * item.quantity;
+
+			// Build detailed item list for metadata
+			detailedCartItems.push({
 				priceId: item.priceId,
 				quantity: item.quantity,
 				isSubscription: !!item.isSubscription,
-				recurringInterval: item.recurringInterval || null,
+				recurringInterval: item.recurringInterval,
 				productId: item.productId,
-				productName: item.name
+				productName: item.name,
+				price: ((stripePrice.unit_amount ?? 0) / 100).toString()
 			});
 		}
 
-		if (totalAmount <= 0) {
-			// Allow $0 if it's purely a trial subscription setup? Stripe might require a minimum.
-			// For now, enforce positive amount, adjust if free trials are needed.
-			return res.status(400).send({ error: 'Calculated total amount must be positive.' });
-		}
-
-		// --- Customer and Payment Intent Params --- 
-		const paymentIntentParams: Stripe.PaymentIntentCreateParams = {
-			amount: totalAmount, 
-			currency: 'usd', 
-			automatic_payment_methods: {
-				enabled: true,
-			},
-			metadata: {
-				cart_items: JSON.stringify(metadataCartItems),
-				contains_subscription: String(containsSubscription),
-				userId: sessionUser?.id ? String(sessionUser.id) : null,
-				// Store contact/shipping info (ensure values are strings)
-				contactEmail: contactInfo.email,
-				contactPhone: contactInfo.phone || null,
-				shippingName: shippingAddress.fullName,
-				shippingAddress1: shippingAddress.address1,
-				shippingAddress2: shippingAddress.address2 || null,
-				shippingCity: shippingAddress.city,
-				shippingState: shippingAddress.state,
-				shippingPostalCode: shippingAddress.postalCode,
-				shippingCountry: shippingAddress.country
-			}
+		// --- Step 2: Prepare Metadata Context ---
+		// Consolidate context needed by webhook handlers
+		const checkoutContext = {
+			// User ID is crucial for linking records later
+			userId: sessionUser?.id || null,
+			// Store the detailed cart representation
+			cartItems: detailedCartItems,
+			// Store contact/shipping info as well for order creation
+			contactInfo: contactInfo,
+			shippingAddress: shippingAddress,
 		};
+		const contextString = JSON.stringify(checkoutContext);
+		// TODO: Add check for metadata size limits if contextString becomes very large
+
+		// --- Step 3: Create SetupIntent (for subs) or PaymentIntent (one-time) ---
+		let clientSecret: string | null = null;
 
 		if (containsSubscription) {
-			// Ensure sessionUser is defined here (already checked above, but good practice)
-			if (!sessionUser) {
-				console.error("Subscription detected but user session is missing.");
-				return res.status(500).send({ error: 'User session error during subscription checkout.' });
+			// --- Subscription Flow -> Create SetupIntent ---
+			if (!sessionUser || !sessionUser.id) { // Should be caught earlier, but double-check
+				return res.status(401).send({ error: 'Login required for subscriptions.' });
 			}
 
-			let stripeCustomerId = sessionUser.stripeCustomerId; // Now correctly typed
-
-			// 1. Find or Create Stripe Customer
+			// Find or Create Stripe Customer (keep existing logic)
+			let stripeCustomerId = sessionUser.stripeCustomerId;
 			if (!stripeCustomerId) {
 				const existingCustomers = await stripe.customers.list({ email: sessionUser.email, limit: 1 });
 				if (existingCustomers.data.length > 0) {
@@ -198,54 +172,77 @@ router.post('/create-payment-intent', async (req: Request, res: Response) => {
 					const newCustomer = await stripe.customers.create({
 						email: sessionUser.email,
 						name: sessionUser.name || undefined,
-						metadata: {
-							internal_user_id: String(sessionUser.id) // Ensure metadata value is string
-						}
+						phone: contactInfo.phone || undefined,
+						shipping: {
+							name: shippingAddress.fullName,
+							address: {
+								line1: shippingAddress.address1, line2: shippingAddress.address2 || undefined,
+								city: shippingAddress.city, state: shippingAddress.state,
+								postal_code: shippingAddress.postalCode, country: shippingAddress.country,
+							},
+						},
+						metadata: { internal_user_id: String(sessionUser.id) }
 					});
 					stripeCustomerId = newCustomer.id;
 				}
-
-				// 2. Update local User record with Stripe Customer ID
-				try {
-					await prisma.user.update({
-						where: { id: sessionUser.id },
-						data: { stripeCustomerId: stripeCustomerId }
-					});
-				} catch (dbError) {
-					console.error(`Failed to update user ${sessionUser.id} with stripeCustomerId ${stripeCustomerId}:`, dbError);
-				}
+				// Update local user
+				await prisma.user.update({
+					where: { id: sessionUser.id }, data: { stripeCustomerId: stripeCustomerId }
+				});
+				sessionUser.stripeCustomerId = stripeCustomerId; // Update session
 			}
 
-			if (!stripeCustomerId) {
-				// Handle case where customer ID couldn't be obtained/created
-				console.error("Could not find or create Stripe customer for subscription.");
-				return res.status(500).send({ error: 'Could not process subscription customer info.' });
+			// Create Setup Intent
+			console.log(`Creating SetupIntent for customer: ${stripeCustomerId}`);
+			const setupIntent = await stripe.setupIntents.create({
+				customer: stripeCustomerId,
+				usage: 'on_session', // Optimize for saving card during checkout session
+				automatic_payment_methods: { enabled: true }, // Allow Stripe to manage payment methods
+				metadata: { checkout_context: contextString },
+			});
+			console.log(`SetupIntent ${setupIntent.id} created.`);
+			clientSecret = setupIntent.client_secret;
+
+		} else {
+			// --- One-Time Payment Flow -> Create PaymentIntent ---
+			console.log("Creating PaymentIntent for one-time purchase.");
+			if (totalAmountCent <= 0) {
+				return res.status(400).send({ error: 'Total amount must be positive for one-time payment.' });
 			}
 
-			// 3. Set params for saving payment method
-			paymentIntentParams.customer = stripeCustomerId;
-			paymentIntentParams.setup_future_usage = 'on_session';
+			const paymentIntent = await stripe.paymentIntents.create({
+				amount: totalAmountCent,
+				currency: 'usd',
+				automatic_payment_methods: { enabled: true },
+				metadata: { checkout_context: contextString },
+				// Add customer ID if user is logged in, even for one-time, to potentially link payment? Optional.
+				// customer: sessionUser?.stripeCustomerId || undefined,
+			});
+			console.log(`PaymentIntent ${paymentIntent.id} created.`);
+			clientSecret = paymentIntent.client_secret;
 		}
 
-		// Create the Payment Intent
-		const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams);
-
-		res.send({
-			clientSecret: paymentIntent.client_secret,
-		});
+		// --- Step 4: Return Client Secret ---
+		if (!clientSecret) {
+			throw new Error("Failed to initialize payment (client secret missing).");
+		}
+		res.send({ clientSecret: clientSecret });
 
 	} catch (error: any) {
-		console.error("Error processing payment intent with subscriptions:", error);
-		if (error instanceof Stripe.errors.StripeInvalidRequestError && error.code === 'resource_missing') {
-			return res.status(400).send({ error: `Invalid Price ID found in request.` });
-		}
-		// Add more specific error handling if needed
-		res.status(500).send({ error: 'Internal server error processing payment.' });
+		console.error("Error processing /initiate-checkout:", error);
+		let userMessage = 'Internal server error processing payment.';
+		if (error.type === 'StripeCardError') { userMessage = error.message; }
+		else if (error.type === 'StripeInvalidRequestError') { userMessage = `Invalid data provided: ${error.message}`; }
+		res.status(500).send({ error: userMessage });
 	}
 });
 
 // --- POST /api/stripe/webhook --- 
 router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Response) => {
+    // --- Add log here to see if endpoint is hit --- 
+    console.log("DEBUG: /api/stripe/webhook endpoint hit!");
+    // ---------------------------------------------
+
 	if (!stripe) {
 		console.error("Webhook Error: Stripe not initialized.");
 		return res.status(500).send('Webhook Error: Stripe configuration issue.');
@@ -259,161 +256,248 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 	let event: Stripe.Event;
 
 	try {
+		console.log("DEBUG: Attempting webhook signature verification..."); // Log before verification
 		event = stripe.webhooks.constructEvent(req.body, sig as string | string[], webhookSecret);
+		console.log("DEBUG: Webhook signature verification successful."); // Log after verification
 	} catch (err: any) {
 		console.error(`Webhook signature verification failed: ${err.message}`);
+		// Log the received signature and headers for comparison if needed
+		// console.log("Received Signature:", sig);
+		// console.log("Headers:", req.headers);
 		return res.status(400).send(`Webhook Error: ${err.message}`);
 	}
 
 	console.log(`Received Stripe webhook event: ${event.type}`);
 
+    // --- Log the entire event object --- 
+    // console.log("DEBUG: Full webhook event object:", JSON.stringify(event, null, 2));
+    // ---------------------------------
+
 	switch (event.type) {
-		case 'payment_intent.succeeded':
-			const paymentIntent = event.data.object as Stripe.PaymentIntent;
-			console.log(`Processing successful payment intent: ${paymentIntent.id}`);
+		case 'setup_intent.succeeded':
+			const setupIntent = event.data.object as Stripe.SetupIntent;
+			console.log(`---> Handling ${event.type} for SetupIntent ID: ${setupIntent.id}`);
 
 			try {
-				// --- Extract data from Payment Intent ---
-				const containsSubscription = paymentIntent.metadata?.contains_subscription === 'true';
-				const cartItemsString = paymentIntent.metadata?.cart_items;
-				const userIdString = paymentIntent.metadata?.userId;
-				const customerId = typeof paymentIntent.customer === 'string' ? paymentIntent.customer : null;
-				const paymentMethodId = typeof paymentIntent.payment_method === 'string' ? paymentIntent.payment_method : null;
-				const contactEmail = paymentIntent.metadata?.contactEmail;
-				const contactPhone = paymentIntent.metadata?.contactPhone;
-				const shippingName = paymentIntent.metadata?.shippingName;
-				const shippingAddress1 = paymentIntent.metadata?.shippingAddress1;
-				const shippingAddress2 = paymentIntent.metadata?.shippingAddress2;
-				const shippingCity = paymentIntent.metadata?.shippingCity;
-				const shippingState = paymentIntent.metadata?.shippingState;
-				const shippingPostalCode = paymentIntent.metadata?.shippingPostalCode;
-				const shippingCountry = paymentIntent.metadata?.shippingCountry;
+				// --- 1. Extract data from SetupIntent --- 
+				const customerId = typeof setupIntent.customer === 'string' ? setupIntent.customer : null;
+				const paymentMethodId = typeof setupIntent.payment_method === 'string' ? setupIntent.payment_method : null;
+				const contextString = setupIntent.metadata?.checkout_context;
 
-				// --- Validate necessary data ---
-				if (!cartItemsString || !contactEmail || !shippingName || !shippingAddress1 || !shippingCity || !shippingState || !shippingPostalCode || !shippingCountry) {
-					console.error("Webhook Error: Missing essential metadata (cart_items, contact, or shipping) in PI:", paymentIntent.id);
-					break; // Stop processing if core data is missing
+				// --- 2. Validate extracted data --- 
+				if (!customerId || !paymentMethodId) {
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing customer ID or payment method ID.`);
+					break; // Cannot proceed without customer/payment method
+				}
+				if (!contextString) {
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing checkout_context metadata.`);
+					break; // Cannot proceed without context
 				}
 
-				let cartItems: CartItem[] = [];
+				// --- 3. Parse Context --- 
+				let context: any;
 				try {
-					cartItems = JSON.parse(cartItemsString);
+					context = JSON.parse(contextString);
 				} catch (parseError) {
-					console.error("Webhook Error: Failed to parse cart_items metadata:", parseError, "PI:", paymentIntent.id);
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Failed to parse checkout_context metadata:`, parseError);
 					break;
 				}
 
-				const userId = userIdString ? parseInt(userIdString, 10) : null;
-				const totalAmountDecimal = new Decimal(paymentIntent.amount / 100); // Convert cents to Decimal
+				const { userId, cartItems, contactInfo, shippingAddress } = context;
 
-				// --- Create Order and OrderItems in a Transaction ---
-				let createdOrderId: number | null = null;
-				let createdSubscriptionIds: string[] = [];
+				if (!userId || !cartItems || !Array.isArray(cartItems) || cartItems.length === 0 || !contactInfo || !shippingAddress) {
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Invalid context structure in metadata.`);
+					break;
+				}
 
+				// --- 4. Prepare for Stripe Subscription Creation --- 
+				const subscriptionItems = cartItems
+					.filter((item: any) => item.isSubscription)
+					.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
+
+				const oneTimeItems = cartItems
+					.filter((item: any) => !item.isSubscription)
+					.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
+
+				if (subscriptionItems.length === 0) {
+					// This shouldn't happen if the SI was created correctly, but good to check.
+					console.warn(`Webhook (SetupIntent Succeeded ${setupIntent.id}): No subscription items found in context. Skipping subscription creation.`);
+					// Maybe handle one-time items here if they exist? Or rely on payment_intent.succeeded?
+					break;
+				}
+
+				const subscriptionCreateParams: Stripe.SubscriptionCreateParams = {
+					customer: customerId,
+					items: subscriptionItems,
+					default_payment_method: paymentMethodId,
+					metadata: { userId: String(userId) } // Pass userId along to sub metadata too
+				};
+
+				if (oneTimeItems.length > 0) {
+					subscriptionCreateParams.add_invoice_items = oneTimeItems;
+				}
+
+				// --- 5. Create Stripe Subscription --- 
+				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Attempting to create Stripe Subscription...`);
+				const stripeSubscription = await stripe.subscriptions.create(subscriptionCreateParams);
+				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Created Stripe Subscription ${stripeSubscription.id}`);
+
+				// --- 6. Create Local Records in Transaction --- 
 				try {
 					await prisma.$transaction(async (tx) => {
-						// 1. Create the Order
+						console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): Starting DB transaction...`);
+						
+						// a) Create Subscription Record
+						// We might not have currentPeriodEnd yet if using default_incomplete
+						const subEndDateRaw = (stripeSubscription as any).current_period_end;
+						const subEndDate = typeof subEndDateRaw === 'number' ? new Date(subEndDateRaw * 1000) : undefined;
+						// Assume only one subscription item for now to get priceId/interval
+						const firstSubItemContext = cartItems.find((item: any) => item.isSubscription);
+
+						const newLocalSub = await tx.subscription.create({
+							data: {
+								userId: userId,
+								stripeSubscriptionId: stripeSubscription.id,
+								stripePriceId: firstSubItemContext?.priceId || 'unknown', // Fallback
+								status: stripeSubscription.status, // Will likely be 'incomplete' initially
+								interval: firstSubItemContext?.recurringInterval || 'unknown', // Fallback
+								currentPeriodEnd: subEndDate,
+								cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
+								collectionPaused: (stripeSubscription as any).pause_collection?.behavior === 'void'
+							}
+						});
+						console.log(`        Created local Subscription record: ${newLocalSub.id}`);
+
+						// b) Create Order Record (linking to subscription)
+						// Calculate total amount from context cartItems (prices are strings)
+						let orderTotalAmount = 0;
+						cartItems.forEach((item: any) => {
+							const price = parseFloat(item.price);
+							if (!isNaN(price)) {
+								orderTotalAmount += price * item.quantity;
+							}
+						});
+						const totalAmountDecimal = new Decimal(orderTotalAmount.toFixed(2));
+						
 						const newOrder = await tx.order.create({
 							data: {
-								userId: userId, // Link to user if ID exists
-								totalAmount: totalAmountDecimal,
-								status: 'PAID', // Set status as PAID since PI succeeded
-								contactEmail: contactEmail,
-								contactPhone: contactPhone === 'null' ? null : contactPhone, // Handle null string from metadata
-								shippingName: shippingName,
-								shippingAddress1: shippingAddress1,
-								shippingAddress2: shippingAddress2 === 'null' ? null : shippingAddress2,
-								shippingCity: shippingCity,
-								shippingState: shippingState,
-								shippingPostalCode: shippingPostalCode,
-								shippingCountry: shippingCountry,
-								// subscriptionId: null, // Link later if needed for initial order
+								userId: userId,
+								subscriptionId: newLocalSub.id, // Link to the NEW local subscription ID
+								totalAmount: totalAmountDecimal, 
+								status: 'PAID', // Assume PAID because SetupIntent succeeded
+								contactEmail: contactInfo.email,
+								contactPhone: contactInfo.phone || null,
+								shippingName: shippingAddress.fullName,
+								shippingAddress1: shippingAddress.address1,
+								shippingAddress2: shippingAddress.address2 || null,
+								shippingCity: shippingAddress.city,
+								shippingState: shippingAddress.state,
+								shippingPostalCode: shippingAddress.postalCode,
+								shippingCountry: shippingAddress.country,
 								items: {
-									// 2. Create OrderItems inline
-									create: cartItems.map((item) => ({
+									create: cartItems.map((item: any) => ({
 										productId: item.productId,
-										productName: item.name,
+										productName: item.productName || 'Unknown',
 										quantity: item.quantity,
-										// Convert price string (assumed dollars) back to Decimal
-										price: new Decimal(item.price),
+										price: new Decimal(item.price || 0), // Ensure price is Decimal
 									})),
 								},
 							},
-							select: { id: true } // Select only the ID
+							select: { id: true }
 						});
-						createdOrderId = newOrder.id;
-						console.log(`Created local Order ${createdOrderId} for PI: ${paymentIntent.id}`);
-
-						// 3. Handle Subscription Creation (if applicable)
-						if (containsSubscription) {
-							console.log("PaymentIntent contains subscription, attempting to create...");
-							if (!customerId || !paymentMethodId || !userId) {
-								// This should ideally not happen if create-payment-intent worked
-								throw new Error("Missing data for subscription creation (Customer/PM/User)");
-							}
-
-							const subscriptionItems = cartItems.filter(item => item.isSubscription);
-							for (const subItem of subscriptionItems) {
-								// Create Stripe Subscription
-								const stripeSubscription = await stripe.subscriptions.create({
-									customer: customerId,
-									items: [{ price: subItem.priceId, quantity: subItem.quantity }],
-									default_payment_method: paymentMethodId,
-									payment_behavior: 'default_incomplete',
-									expand: ['latest_invoice.payment_intent', 'pending_setup_intent'],
-									metadata: { internal_user_id: userIdString, originating_payment_intent_id: paymentIntent.id }
-								});
-								console.log(`Stripe Subscription ${stripeSubscription.id} created with Status: ${stripeSubscription.status}`);
-
-								// Type assertion might be needed depending on SDK version
-								const subEndDate = (stripeSubscription as any).current_period_end;
-
-								// Create Local Subscription Record
-								if ((stripeSubscription.status === 'active' || stripeSubscription.status === 'trialing') && subEndDate) {
-									const localSub = await tx.subscription.create({
-										data: {
-											userId: userId,
-											stripeSubscriptionId: stripeSubscription.id,
-											stripePriceId: subItem.priceId,
-											status: stripeSubscription.status,
-											interval: subItem.recurringInterval ?? 'unknown',
-											currentPeriodEnd: new Date(subEndDate * 1000),
-											cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
-											// Optionally link the initial order back
-											// renewalOrders: { connect: { id: createdOrderId } } // Can't connect here directly
-										}
-									});
-									createdSubscriptionIds.push(localSub.id); // Store local DB ID
-									console.log(`Local subscription record created: ${localSub.id}`);
-								} else {
-									console.warn(`Stripe subscription ${stripeSubscription.id} has status ${stripeSubscription.status}. Local record not created.`);
-								}
-							} // End loop over subscription items
-
-							// Optionally: Link the initial order to the first created subscription
-							// if (createdOrderId && createdSubscriptionIds.length > 0) {
-							//   await tx.order.update({
-							//     where: { id: createdOrderId },
-							//     data: { subscriptionId: createdSubscriptionIds[0] }
-							//   });
-							//   console.log(`Linked initial Order ${createdOrderId} to Subscription ${createdSubscriptionIds[0]}`);
-							// }
-
-						} // End containsSubscription block
+						console.log(`        Created local Order record: ${newOrder.id} linked to Sub ${newLocalSub.id}`);
+					
 					}); // End Transaction
-
-				} catch (txError: any) {
-					console.error("Webhook Error: Transaction failed during order/subscription creation:", txError);
-					// Decide how to handle partial failures, maybe update order status to 'error'
-					return res.status(500).send('Webhook Error: Failed to save order/subscription data.');
+					console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): DB transaction completed.`);
+				
+				} catch (txError) {
+					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): DB transaction failed:`, txError);
+					// If the transaction fails, the Stripe subscription still exists.
+					// Need robust error handling / retry / notification logic here.
 				}
 
 			} catch (error) {
-				console.error("Error processing payment_intent.succeeded webhook logic:", error);
-				return res.status(500).send('Internal server error handling webhook.');
+				console.error(`Webhook Error (SetupIntent Succeeded ${setupIntent.id}): Error processing event:`, error);
+				// Don't send 500 to Stripe unless it's a webhook signature issue
 			}
 			break;
-		// --- End payment_intent.succeeded Case --- 
+
+		case 'payment_intent.succeeded':
+			const paymentIntent = event.data.object as Stripe.PaymentIntent;
+			console.log(`---> Handling ${event.type} for PaymentIntent ID: ${paymentIntent.id}`);
+
+			try {
+				// --- 1. Extract Context --- 
+				const contextString = paymentIntent.metadata?.checkout_context;
+				if (!contextString) {
+					console.warn(`Webhook (PI Succeeded ${paymentIntent.id}): Missing checkout_context metadata. Cannot determine if one-time purchase.`);
+					// Maybe handle PIs created outside this flow? For now, skip.
+					break;
+				}
+
+				// --- 2. Parse Context --- 
+				let context: any;
+				try {
+					context = JSON.parse(contextString);
+				} catch (parseError) {
+					console.error(`Webhook (PI Succeeded ${paymentIntent.id}): Failed to parse checkout_context metadata:`, parseError);
+					break;
+				}
+
+				const { userId, cartItems, contactInfo, shippingAddress } = context;
+
+				if (!cartItems || !Array.isArray(cartItems) || cartItems.length === 0 || !contactInfo || !shippingAddress) {
+					console.error(`Webhook (PI Succeeded ${paymentIntent.id}): Invalid context structure in metadata.`);
+					break;
+				}
+
+				// --- 3. Check if One-Time Purchase --- 
+				const containsSubscription = cartItems.some((item: any) => item.isSubscription);
+				if (containsSubscription) {
+					console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Context indicates subscription involved. Order creation handled by setup_intent.succeeded. Skipping.`);
+					break; // IMPORTANT: Exit if subscription items were present
+				}
+
+				// --- 4. Create Order for One-Time Purchase --- 
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Processing as one-time purchase order.`);
+				const totalAmountDecimal = new Decimal(paymentIntent.amount / 100);
+
+				// Check if order already exists for this PI? Less likely now, but good practice.
+				// We might need to add paymentIntentId to Order model if we want to prevent duplicates robustly.
+
+				await prisma.order.create({ // Use transaction later if needed
+					data: {
+						userId: userId, // Use userId from context
+						totalAmount: totalAmountDecimal,
+						status: 'PAID',
+						// Use contact/shipping info from context
+						contactEmail: contactInfo.email,
+						contactPhone: contactInfo.phone || null,
+						shippingName: shippingAddress.fullName,
+						shippingAddress1: shippingAddress.address1,
+						shippingAddress2: shippingAddress.address2 || null,
+						shippingCity: shippingAddress.city,
+						shippingState: shippingAddress.state,
+						shippingPostalCode: shippingAddress.postalCode,
+						shippingCountry: shippingAddress.country,
+						items: {
+							create: cartItems.map((item: any) => ({
+								productId: item.productId,
+								productName: item.productName || 'Unknown',
+								quantity: item.quantity,
+								price: new Decimal(item.price || 0), // Ensure price is Decimal
+							})),
+						},
+					},
+					select: { id: true }
+				});
+				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Created one-time Order.`);
+
+			} catch (error) {
+				console.error(`Webhook Error (PI Succeeded ${paymentIntent.id}): Error creating order:`, error);
+				// Don't send 500 for processing errors if event was received ok
+			}
+			break;
 
 		case 'payment_intent.payment_failed':
 			const failedPaymentIntent = event.data.object as Stripe.PaymentIntent;
@@ -422,141 +506,177 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 			break;
 
 		// --- Handle other subscription-related events --- 
+		case 'customer.subscription.created':
+			const createdSub = event.data.object as Stripe.Subscription;
+			console.log(`---> Handling ${event.type} for Sub ID: ${createdSub.id}, Status: ${createdSub.status}`);
+			// No action needed here in the new flow, as activation/creation is handled
+			// by invoice.paid (via pending context) or customer.subscription.updated.
+			// We could potentially create an 'incomplete' local record here if desired,
+			// but the current logic handles creation upon activation.
+			break;
+
 		case 'customer.subscription.deleted':
-		case 'customer.subscription.updated':
-			const subscriptionEventData = event.data.object as Stripe.Subscription;
-			console.log(`Subscription ${event.type}: ${subscriptionEventData.id}, Status: ${subscriptionEventData.status}`);
+			console.log(`Subscription deleted event received: ${(event.data.object as Stripe.Subscription).id}`);
+			// Find local sub by stripeSubscriptionId and update status to 'canceled' or similar
 			try {
-				// Attempting access with 'any' cast due to persistent type issues
-				const periodEndTimestamp = (subscriptionEventData as any).current_period_end;
-				const updateData: {
-					status: Stripe.Subscription.Status;
-					cancelAtPeriodEnd: boolean;
-					currentPeriodEnd?: Date;
-				} = {
-					status: subscriptionEventData.status,
-					cancelAtPeriodEnd: subscriptionEventData.cancel_at_period_end,
-					// Only add currentPeriodEnd if it's a valid number
-					currentPeriodEnd: typeof periodEndTimestamp === 'number'
-						? new Date(periodEndTimestamp * 1000)
-						: undefined,
-				};
-
-				if (updateData.currentPeriodEnd === undefined) {
-					delete updateData.currentPeriodEnd;
-				}
-
 				await prisma.subscription.updateMany({
-					where: { stripeSubscriptionId: subscriptionEventData.id },
-					data: updateData,
+					where: { stripeSubscriptionId: (event.data.object as Stripe.Subscription).id },
+					data: { status: 'canceled' } // Or maybe a dedicated deleted status?
 				});
-				console.log(`Updated local subscription status for ${subscriptionEventData.id}`);
-
+				console.log(`Marked local subscription as canceled: ${(event.data.object as Stripe.Subscription).id}`);
 			} catch (dbError) {
-				console.error(`Failed to update local subscription status for ${subscriptionEventData.id}:`, dbError);
+				console.error(`Failed to mark local subscription as canceled: ${(event.data.object as Stripe.Subscription).id}`, dbError);
 			}
 			break;
 
-		// --- Handle Invoice Paid (Subscription Renewals) ---
-		case 'invoice.paid':
-			const invoice = event.data.object as Stripe.Invoice;
-			// Use 'any' cast for subscription ID access, with type check
-			const stripeSubscriptionId = typeof (invoice as any).subscription === 'string' ? (invoice as any).subscription : null;
+		case 'customer.subscription.updated':
+			const updatedSubEventData = event.data.object as Stripe.Subscription;
+			console.log(`---> Handling ${event.type} for Sub ID: ${updatedSubEventData.id}`);
+			console.log(`    Incoming Status: ${updatedSubEventData.status}`);
+			console.log(`    Incoming cancelAtPeriodEnd: ${updatedSubEventData.cancel_at_period_end}`);
+			console.log(`    Incoming current_period_end (raw): ${(updatedSubEventData as any).current_period_end}`);
+			console.log(`    Incoming pause_collection: ${JSON.stringify((updatedSubEventData as any).pause_collection)}`);
 
-			console.log(`Processing invoice.paid event for Invoice: ${invoice.id}, Subscription: ${stripeSubscriptionId}`);
+			try {
+				// Attempt to find existing local subscription
+				console.log(`    Searching for existing local subscription with Stripe ID: ${updatedSubEventData.id}`);
+				const existingLocalSub = await prisma.subscription.findUnique({
+					where: { stripeSubscriptionId: updatedSubEventData.id },
+				});
 
-			if (!stripeSubscriptionId) {
-				console.log(`Invoice ${invoice.id} is not related to a subscription. Skipping.`);
-				break;
-			}
+				if (existingLocalSub) {
+					// --- Update Existing Subscription ---
+					console.log(`    Found local subscription ID: ${existingLocalSub.id}. Updating...`);
+					const periodEndTimestamp = (updatedSubEventData as any).current_period_end;
+					const updateData: any = {
+						status: updatedSubEventData.status,
+						cancelAtPeriodEnd: updatedSubEventData.cancel_at_period_end,
+						collectionPaused: (updatedSubEventData as any).pause_collection?.behavior === 'void',
+						currentPeriodEnd: typeof periodEndTimestamp === 'number'
+							? new Date(periodEndTimestamp * 1000)
+							: existingLocalSub.currentPeriodEnd, // Keep existing if null/undefined comes in
+					};
+					if (updateData.currentPeriodEnd === undefined) delete updateData.currentPeriodEnd;
 
-			if (invoice.status === 'paid') {
-				try {
-					const localSubscription = await prisma.subscription.findUnique({
-						where: { stripeSubscriptionId: stripeSubscriptionId },
-						include: { user: true }
+					console.log(`    Attempting DB update for ${existingLocalSub.id} with data:`, JSON.stringify(updateData));
+					const updateResult = await prisma.subscription.update({
+						where: { id: existingLocalSub.id },
+						data: updateData,
 					});
+					console.log(`    DB update successful for ${existingLocalSub.id}. New status: ${updateResult.status}`);
 
-					if (!localSubscription) {
-						console.error(`Webhook Error: Local subscription not found for Stripe ID: ${stripeSubscriptionId}`);
-						break;
-					}
+				} else {
+					// --- Local Subscription Not Found --- 
+					console.warn(`    WARNING: Local subscription not found for Stripe ID ${updatedSubEventData.id} during update. Creation is handled by setup_intent.succeeded.`);
+					// --- REMOVED Fallback Creation Logic --- 
+				}
 
-					// Fetch latest subscription data from Stripe
-					const stripeSubscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+			} catch (dbError) {
+				console.error(`---> ERROR during ${event.type} DB processing for ${updatedSubEventData.id}:`, dbError);
+			}
+			break;
 
-					// Use 'any' cast for current_period_end access, with type check
-					const periodEndTimestamp = (stripeSubscription as any).current_period_end;
-					if (typeof periodEndTimestamp !== 'number') {
-						console.error(`Webhook Error: Stripe subscription ${stripeSubscriptionId} missing numeric current_period_end.`);
-						break;
-					}
+		// --- Invoice Events (Mainly for Renewals Now) ---
+		case 'invoice.paid':
+			const paidInvoice = event.data.object as Stripe.Invoice;
+			const subIdForInvoice = typeof (paidInvoice as any).subscription === 'string' ? (paidInvoice as any).subscription : null;
+			
+			console.log(`---> Handling invoice.paid for Invoice ID: ${paidInvoice.id}`);
+			console.log(`    Related Subscription ID: ${subIdForInvoice}`);
+			console.log(`    Invoice Status: ${paidInvoice.status}`);
+			console.log(`    Billing Reason: ${paidInvoice.billing_reason}`);
 
+			// --- Focus on Renewals --- 
+			if (paidInvoice.status === 'paid' && subIdForInvoice && 
+				(paidInvoice.billing_reason === 'subscription_cycle' || paidInvoice.billing_reason === 'subscription_update')) 
+			{
+				console.log(`    Processing as subscription renewal/update payment.`);
+				try {
+					// --- Removed PendingOrderContext Check --- 
+					
+					// --- Renewal Logic --- 
 					await prisma.$transaction(async (tx) => {
-						// 1. Update local subscription
-						const updatedSub = await tx.subscription.update({
+						// 1. Find local subscription
+						const localSubscription = await tx.subscription.findUnique({
+							where: { stripeSubscriptionId: subIdForInvoice },
+							include: { user: true }
+						});
+						if (!localSubscription) { 
+							// Log error but don't throw inside transaction to avoid rollback if possible?
+							// Or maybe throwing is correct? Decide on desired behavior.
+							console.error(`    ERROR: Local subscription ${subIdForInvoice} not found for renewal.`);
+							// Consider throwing an error here if finding the subscription is critical
+							// throw new Error(`Local subscription ${subIdForInvoice} not found for renewal.`);
+							return; // Exit transaction safely if sub not found
+						}
+						console.log(`    Found local subscription ID: ${localSubscription.id} for renewal.`);
+
+						// 2. Fetch latest subscription data from Stripe for accurate period end
+						let stripeSubscription: Stripe.Subscription | null = null;
+						try {
+							stripeSubscription = await stripe!.subscriptions.retrieve(subIdForInvoice);
+						} catch (stripeError) {
+							console.error(`    ERROR: Failed to retrieve Stripe subscription ${subIdForInvoice} during renewal:`, stripeError);
+							// Again, decide if we should throw to rollback or just log and potentially skip updates
+							return; // Exit transaction safely
+						}
+						console.log(`    Fetched Stripe Sub Status: ${stripeSubscription.status}, Period End: ${(stripeSubscription as any).current_period_end}`);
+						const periodEndTimestamp = (stripeSubscription as any).current_period_end;
+
+						// 3. Update local subscription (status, period end)
+						console.log(`    ---> Inside Renewal Transaction: Updating local subscription ${localSubscription.id}`);
+						await tx.subscription.update({
 							where: { id: localSubscription.id },
 							data: {
 								status: stripeSubscription.status,
-								currentPeriodEnd: new Date(periodEndTimestamp * 1000),
+								currentPeriodEnd: typeof periodEndTimestamp === 'number' ? new Date(periodEndTimestamp * 1000) : localSubscription.currentPeriodEnd, // Keep existing if Stripe is null
 								cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
 							}
 						});
-						console.log(`Updated local subscription ${localSubscription.id}, new end date: ${updatedSub.currentPeriodEnd}`);
-
-						// 2. Create Renewal Order
-						const lineItem = invoice.lines.data[0];
-						// Use 'any' cast for price access, with checks
+						console.log(`    ---> Inside Renewal Transaction: Local subscription updated.`);
+						
+						// 4. Create Renewal Order 
+						console.log(`    ---> Inside Renewal Transaction: Creating renewal Order for Invoice ${paidInvoice.id}`);
+						const lineItem = paidInvoice.lines.data[0];
 						const lineItemPrice = (lineItem as any)?.price;
 						if (!lineItem || !lineItemPrice || typeof lineItemPrice.unit_amount !== 'number') {
-							console.warn(`Invoice ${invoice.id} missing valid line item price data. Skipping renewal order.`);
-							return;
+							console.warn(`    WARNING: Invoice ${paidInvoice.id} renewal line item invalid. Skipping order creation.`);
+							return; // Exit transaction block if line item is invalid
 						}
-
-						const productName = lineItem.description || 'Subscription Renewal';
-						const productId = typeof lineItemPrice.product === 'string' ? lineItemPrice.product : 'unknown-product';
-						const quantity = lineItem.quantity || 1;
-						const priceDecimal = new Decimal(lineItemPrice.unit_amount / 100);
-						const totalAmountDecimal = new Decimal(invoice.amount_paid / 100);
-						const contactEmail = invoice.customer_email || localSubscription.user?.email || 'unknown@example.com';
-						const shippingName = invoice.customer_name || localSubscription.user?.name || 'N/A';
-
 						await tx.order.create({
 							data: {
 								userId: localSubscription.userId,
-								totalAmount: totalAmountDecimal,
-								status: 'PAID',
-								contactEmail: contactEmail,
-								shippingName: shippingName,
-								shippingAddress1: invoice.customer_shipping?.address?.line1 || 'N/A',
-								shippingCity: invoice.customer_shipping?.address?.city || 'N/A',
-								shippingState: invoice.customer_shipping?.address?.state || 'N/A',
-								shippingPostalCode: invoice.customer_shipping?.address?.postal_code || 'N/A',
-								shippingCountry: invoice.customer_shipping?.address?.country || 'N/A',
 								subscriptionId: localSubscription.id,
+								totalAmount: new Decimal(paidInvoice.amount_paid / 100),
+								status: 'PAID',
+								contactEmail: paidInvoice.customer_email || localSubscription.user?.email || 'unknown',
+								shippingName: paidInvoice.customer_name || localSubscription.user?.name || 'N/A',
+								shippingAddress1: paidInvoice.customer_shipping?.address?.line1 || 'N/A',
+								shippingCity: paidInvoice.customer_shipping?.address?.city || 'N/A',
+								shippingState: paidInvoice.customer_shipping?.address?.state || 'N/A',
+								shippingPostalCode: paidInvoice.customer_shipping?.address?.postal_code || 'N/A',
+								shippingCountry: paidInvoice.customer_shipping?.address?.country || 'N/A',
 								items: {
 									create: [{
-										productId: productId,
-										productName: productName,
-										quantity: quantity,
-										price: priceDecimal,
+										productId: typeof lineItemPrice.product === 'string' ? lineItemPrice.product : 'unknown',
+										productName: lineItem.description || 'Subscription Renewal',
+										quantity: lineItem.quantity || 1,
+										price: new Decimal(lineItemPrice.unit_amount / 100),
 									}]
 								}
-							},
-							select: { id: true }
+							}
 						});
-						console.log(`Created renewal Order for Subscription ${localSubscription.id}, Invoice ${invoice.id}`);
-
-					}); // End Transaction
-
+						console.log(`    ---> Inside Renewal Transaction: Renewal Order created successfully.`);
+					}); // End Renewal Transaction
 				} catch (error: any) {
-					console.error(`Webhook Error: Failed processing invoice.paid for subscription ${stripeSubscriptionId}:`, error);
+					// Catch errors during the renewal transaction
+					console.error(`---> ERROR processing renewal transaction for invoice ${paidInvoice.id}:`, error);
 				}
 			} else {
-				console.log(`Invoice ${invoice.id} status is ${invoice.status} (not 'paid'). Skipping.`);
+				// Log why this invoice.paid event is being ignored
+				console.log(`    Invoice ${paidInvoice.id} not processed: Status=${paidInvoice.status}, SubID=${subIdForInvoice}, Reason=${paidInvoice.billing_reason}`);
 			}
 			break;
-		// --- End invoice.paid Case ---
 
 		case 'invoice.payment_failed':
 			const failedInvoice = event.data.object as Stripe.Invoice;

@@ -1,20 +1,11 @@
 import express, { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import prisma from '../db'; // Import the singleton instance
+// Import SessionUser from the shared types file
+import { SessionUser } from '../types'; 
 
 const router: Router = express.Router();
 const SALT_ROUNDS = 10; // Cost factor for bcrypt hashing
-
-// Define the structure for session user data based on the Prisma schema
-interface SessionUser {
-	id: number;
-	email: string;
-	name: string | null;
-	phone?: string | null; // Add optional phone number
-	role: 'USER' | 'ADMIN'; // Match UserRole enum
-	createdAt: Date;
-	updatedAt: Date;
-}
 
 // Extend Express SessionData to include user
 declare module 'express-session' {
@@ -76,27 +67,31 @@ router.post('/signup', checkNotAuthenticated, async (req: Request, res: Response
                 phone: null, // Initialize phone as null explicitly
                 role: email === process.env.ADMIN_EMAIL ? 'ADMIN' : 'USER' // Default role
             },
-            // Select the fields needed for the session
+            // Select ONLY the fields needed for the immediate session
             select: {
                 id: true,
                 email: true,
                 name: true,
                 phone: true,
                 role: true,
-                createdAt: true,
-                updatedAt: true,
+                stripeCustomerId: true // Select this too, even if null initially
+                // Remove fields not in SessionUser
+                // createdAt: true,
+                // updatedAt: true,
             }
         });
 
-        // Assign selected data directly to session (matches SessionUser structure)
+        // Assign selected data directly to session (matching SessionUser structure)
         req.session.user = {
             id: newUser.id,
             email: newUser.email,
             name: newUser.name,
             phone: newUser.phone,
             role: newUser.role,
-            createdAt: newUser.createdAt,
-            updatedAt: newUser.updatedAt,
+            stripeCustomerId: newUser.stripeCustomerId // Should be selected now
+            // Remove fields not in SessionUser
+            // createdAt: newUser.createdAt,
+            // updatedAt: newUser.updatedAt,
         };
 
         console.log('User signed up and logged in:', newUser.email);
@@ -120,37 +115,35 @@ router.post('/login', checkNotAuthenticated, async (req: Request, res: Response)
         // Find user
         const user = await prisma.user.findUnique({
             where: { email },
-            // Select the fields needed for the session
+            // Select the fields needed for the session AND the hash for comparison
              select: {
                 id: true,
                 email: true,
                 name: true,
                 phone: true,
                 role: true,
-                createdAt: true,
-                updatedAt: true,
+                passwordHash: true,
             }
         });
         if (!user) {
-            return res.status(401).json({ message: 'Invalid email or password' }); // Unauthorized
+            return res.status(401).json({ message: 'Invalid email or password' });
         }
 
-        // Compare password
+        // Compare password (user.passwordHash should now be defined)
         const isMatch = await bcrypt.compare(password, user.passwordHash);
         if (!isMatch) {
-            return res.status(401).json({ message: 'Invalid email or password' }); // Unauthorized
+            return res.status(401).json({ message: 'Invalid email or password' }); 
         }
 
         // Login successful - Create session
-        // Assign selected data directly to session (matches SessionUser structure)
+        // Assign ONLY fields defined in SessionUser to req.session.user
         req.session.user = {
             id: user.id,
             email: user.email,
             name: user.name,
             phone: user.phone,
             role: user.role,
-            createdAt: user.createdAt,
-            updatedAt: user.updatedAt,
+            stripeCustomerId: (user as any).stripeCustomerId || null // Need to ensure stripeCustomerId is selected or handle potentially missing field
         };
 
         console.log('User logged in:', user.email);

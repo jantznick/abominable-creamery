@@ -21,7 +21,7 @@ export interface AddItemPayload {
     productId: string;
     slug: string | null;
     name: string;
-    price: string;
+    price: string; 
     imageSrc?: string;
     isSubscription?: boolean; // New: Optional flag for subscriptions
     recurringInterval?: string | null; // New: Optional interval if subscription
@@ -104,7 +104,7 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
                 // Add new item, including slug and subscription details
                 const newItem: CartItem = {
                     priceId: itemToAdd.priceId,
-                    productId: itemToAdd.productId,
+                    productId: itemToAdd.productId, 
                     slug: itemToAdd.slug, // Store slug
                     name: itemToAdd.name,
                     price: itemToAdd.price,

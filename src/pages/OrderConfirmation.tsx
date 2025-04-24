@@ -17,6 +17,7 @@ interface CheckoutDataForConfirmation {
         productName: string; 
         quantity: number;
         price: number; // Price in dollars
+        isSubscription?: boolean; // Make sure this is included if checking!
     }[];
     totalAmount: number; // Total in dollars
     shippingAddress: { 
@@ -45,6 +46,8 @@ export const OrderConfirmation = () => {
     // Removed hasFetched state as useEffect dependencies handle it
     const [paymentStatus, setPaymentStatus] = useState<string | null>(null);
     const [orderError, setOrderError] = useState<string | null>(null); // State for order creation errors
+    // Add state to track if a subscription was purchased
+    const [purchasedSubscription, setPurchasedSubscription] = useState(false);
 
     // Get Payment Intent ID from URL
     const paymentIntentId = searchParams.get('payment_intent');
@@ -70,12 +73,19 @@ export const OrderConfirmation = () => {
             const storedData = sessionStorage.getItem('checkoutDataForConfirmation');
             if (storedData) {
                 checkoutData = JSON.parse(storedData);
+                 // --- Check for subscription before removing data ---
+                // Ensure items exist and check the isSubscription flag
+                if (checkoutData?.items && Array.isArray(checkoutData.items) && checkoutData.items.some(item => item.isSubscription === true)) {
+                    console.log("Order Confirmation: Subscription item detected in checkout data.");
+                    setPurchasedSubscription(true);
+                }
+                // --------------------------------------------------
                 sessionStorage.removeItem('checkoutDataForConfirmation'); // Clear after retrieving
                 console.log("Order Confirmation: Retrieved checkout data from sessionStorage.");
             } else {
                 throw new Error("Checkout data not found in session storage.");
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error("Order Confirmation: Error retrieving or parsing checkout data:", error);
             setMessage("Error: Could not retrieve necessary order details. Please contact support.");
             setIsSuccess(false);
@@ -248,29 +258,46 @@ export const OrderConfirmation = () => {
                      'hourglass_top'}
                 </span>
 
-                <p className={`text-xl md:text-2xl font-semibold mb-8 
-                    ${isSuccess === true ? 'text-slate-800' : ''}
-                    ${isSuccess === false ? 'text-red-700' : ''}
-                    ${isSuccess === null ? 'text-slate-700' : ''}
-                `}>
-                    {message} 
-                </p>
-                <div className="flex justify-center space-x-4">
-                     <Link
-                        to="/flavors"
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
-                    >
-                        Continue Shopping
-                    </Link>
-                     {isSuccess === false && (
-                         <Link
-                            to="/checkout"
-                            className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
+                <h1 className={`text-3xl md:text-4xl font-bold mb-4 ${
+                    isSuccess === true ? 'text-slate-900' : 
+                    isSuccess === false ? 'text-red-700' : 
+                    'text-slate-800'
+                }`}>
+                    {isSuccess === true ? 'Order Confirmed!' : 
+                     isSuccess === false ? 'Payment Failed' : 
+                     'Payment Processing'}
+                </h1>
+
+                <p className="text-xl md:text-2xl mb-8 text-slate-600">{message}</p>
+
+                {isSuccess === true && purchasedSubscription && (
+                    <p className="mt-4 text-slate-600 text-sm">
+                        Your subscription is active! You can manage it from your{' '}
+                        <Link to="/account/subscriptions" className="text-indigo-600 hover:underline">
+                            Account Page
+                        </Link>.
+                        {/* TODO: Create the /account/subscriptions page later */}
+                    </p>
+                )}
+
+                {isSuccess !== null && ( // Only show buttons if not loading/initial state
+                    <div className="flex justify-center space-x-4 mt-12">
+                        <Link
+                            to="/flavors"
+                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
                         >
-                            Try Again
+                            Continue Shopping
                         </Link>
-                     )}
-                </div>
+                        {isSuccess === true && (
+                             <Link
+                                to="/account/orders" // Link to general order history
+                                className="bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
+                            >
+                                View Order History
+                            </Link>
+                        )}
+                    </div>
+                )}
             </div>
         );
     };

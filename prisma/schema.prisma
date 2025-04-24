@@ -42,8 +42,10 @@ model User {
   phone         String?  // Add optional phone number
   passwordHash  String
   role          UserRole @default(USER)
+  stripeCustomerId String? @unique // Add Stripe Customer ID field
   orders        Order[]  // Relation to Orders
   addresses     Address[] // Relation to Addresses
+  subscriptions Subscription[] // Add relation to Subscriptions
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -54,6 +56,10 @@ model Order {
   userId    Int?     
   user      User?    @relation(fields: [userId], references: [id])
   
+  // Relation to Subscription (if this order is a renewal)
+  subscriptionId String?     
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+
   totalAmount Decimal     @db.Decimal(10, 2) // Example precision: 10 total digits, 2 decimal places
   status      OrderStatus @default(PENDING)
 
@@ -76,6 +82,7 @@ model Order {
 
   // Add index for faster lookup of user's orders
   @@index([userId]) 
+  @@index([subscriptionId]) // Add index for querying renewal orders
 }
 
 model OrderItem {
@@ -89,6 +96,9 @@ model OrderItem {
   productName String
   quantity    Int
   price       Decimal  @db.Decimal(10, 2) // Price *per item* at the time of order
+
+  // Optional: Add a direct link to the Stripe Subscription ID if this item resulted in one.
+  // stripeSubscriptionId String? 
 
   @@index([orderId])
 }
@@ -117,6 +127,24 @@ model Address {
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// --- New Subscription Model ---
+model Subscription {
+  id                  String      @id @default(cuid())
+  userId              Int         // Changed to Int to match User ID type
+  user                User        @relation(fields: [userId], references: [id])
+  stripeSubscriptionId String      @unique // From Stripe event checkout.session.completed -> subscription
+  stripePriceId       String      // The ID of the recurring Stripe Price object
+  status              String      // e.g., "active", "canceled", "incomplete", etc. (Matches Stripe statuses)
+  interval            String      // e.g., "month", "week"
+  currentPeriodEnd    DateTime    // From Stripe event
+  cancelAtPeriodEnd   Boolean     @default(false)
+  renewalOrders       Order[]     // Relation back to renewal Orders
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 
   @@index([userId])
 }

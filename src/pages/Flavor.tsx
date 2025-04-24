@@ -4,6 +4,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useProducts } from '../context/ProductContext'; // Import product context hook
 import { Flavor as FlavorType, PriceOption } from '../types/flavor'; // Import correct types
 import { useCart, AddItemPayload } from '../context/CartContext'; // Import useCart AND AddItemPayload from context
+import { useAuth } from '../context/AuthContext'; // <--- Import useAuth
 // import { AddItemPayload } from '../types/cart'; // Remove incorrect import
 
 // Remove local FlavorData type
@@ -28,6 +29,7 @@ export const Flavor = () => {
 	const { slug } = useParams<{ slug: string }>();
 	const { addItem } = useCart();
 	const { flavors } = useProducts(); // Get flavors from context
+	const auth = useAuth(); // <--- Get auth object
 
 	// Find the flavor from context data using the slug
 	const flavorData: FlavorType | undefined = flavors.find(f => f.slug === slug);
@@ -83,6 +85,15 @@ export const Flavor = () => {
 		setQuantity(1);
 	}, [displayablePrices]);
 
+	// --- Effect to reset subscription state on logout --- 
+	useEffect(() => {
+		if (!auth.user && !auth.isLoading) {
+			// If user logs out while viewing, uncheck subscription
+			setIsSubscribed(false);
+		}
+	}, [auth.user, auth.isLoading]);
+	// -----------------------------------------------------
+
 	// Handler for changing purchase type
 	// const handlePurchaseTypeChange = (type: PurchaseType) => { ... };
 
@@ -130,8 +141,15 @@ export const Flavor = () => {
 	}, [selectedPriceId]);
 
 	const handleAddToCart = () => {
-		// Use the calculated selectedEffectivePrice
 		if (!flavorData || !selectedEffectivePrice) return;
+		// --- Add check: Prevent adding subscription if not logged in --- 
+		if (selectedEffectivePrice.isSubscription && !auth.user) {
+			console.error("Attempted to add subscription item while logged out.");
+			// Optionally show an error message to the user
+			auth.openLogin(); // Prompt login
+			return; // Prevent adding to cart
+		}
+		// -------------------------------------------------------------
 
 		const itemPayload: AddItemPayload = {
 			priceId: selectedEffectivePrice.priceId,
@@ -246,26 +264,34 @@ export const Flavor = () => {
 										</div>
 									</label>
 
-									{/* Subscription Checkbox Area (only if possible) */} 
+									{/* Subscription Checkbox Area (conditional on login) */} 
 									{canSubscribe && (
-										<div className="mt-2 pl-8"> 
-											<label className="inline-flex items-center cursor-pointer text-sm">
-												<input
-													type="checkbox"
-													value={priceOpt.priceId} // Value identifies which non-sub price this belongs to
-													// Checked state depends on whether this option is selected AND isSubscribed is true
-													checked={selectedPriceId === priceOpt.priceId && isSubscribed}
-													onChange={handleSubscriptionCheckboxChange}
-													className="form-checkbox h-4 w-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500 mr-2"
-												/>
-												<span className="text-slate-700">Subscribe & Save</span>
-												{/* Calculate potential savings even if not checked, to display next to checkbox */}
-												{(subPriceOpt && getSubscriptionSavings(priceOpt, subPriceOpt).savingsPercent) ? (
-													<span className="ml-2 text-sm text-green-600 font-semibold">
-														({getSubscriptionSavings(priceOpt, subPriceOpt).savingsPercent}% off)
+										<div className="mt-3 pt-3 border-t border-slate-200">
+											{!auth.user && !auth.isLoading ? (
+												// --- Guest View --- 
+												<p className="text-sm text-slate-600">
+													<button type="button" onClick={() => auth.openLogin()} className="text-indigo-600 hover:underline font-medium">
+														Login or Sign Up to Subscribe & Save {savings?.savingsPercent ? ` for ${savings.savingsPercent}% off!` : ''}!
+													</button>
+													{` to Subscribe & Save${savings?.savingsPercent ? ` ${savings.savingsPercent}%` : ''}!`}
+												</p>
+											) : auth.user ? (
+												// --- Logged In View --- 
+												<label className="flex items-center space-x-2 text-sm cursor-pointer">
+													<input 
+														type="checkbox" 
+														name={`subscribe-${priceOpt.priceId}`}
+														value={priceOpt.priceId} // Value identifies the base price
+														// Checked state depends on global isSubscribed AND if this radio is selected
+														checked={isSubscribed && selectedPriceId === priceOpt.priceId} 
+														onChange={handleSubscriptionCheckboxChange}
+														className="form-checkbox h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-slate-300 rounded"
+													/>
+													<span className="font-medium text-indigo-700">
+														Subscribe & Save {savings?.savingsPercent ? `${savings.savingsPercent}%` : ''}
 													</span>
-												) : null}
-											</label>
+												</label>
+											) : null /* Don't show anything while auth is loading */}
 										</div>
 									)}
 								</div>
@@ -301,7 +327,7 @@ export const Flavor = () => {
 						<button
 							onClick={handleAddToCart}
 							// Disable if no effective price is selected or no displayable prices available
-							disabled={!flavorData || !selectedEffectivePrice || displayablePrices.length === 0}
+							disabled={!flavorData || !selectedEffectivePrice || displayablePrices.length === 0 || (isSubscribed && !auth.user)}
 							className={`w-full md:w-auto bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-8 rounded-lg text-lg transition-colors duration-300 ease-in-out flex items-center justify-center space-x-2 shadow hover:shadow-md ${!flavorData || !selectedEffectivePrice || displayablePrices.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
 						>
 							<span className="material-symbols-outlined">add_shopping_cart</span>

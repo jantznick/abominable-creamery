@@ -50,8 +50,14 @@ const CartItemRow: React.FC<CartItemRowProps> = ({ item }) => {
 					 >
 					 {item.name}
 					</Link>
-					{/* Display the price string directly */}
-					<p className="text-sm text-slate-500">${item.price} each</p> 
+					{/* Subscription Details (Conditional) */}
+					{item.isSubscription && (
+						<span className="block text-xs text-indigo-600 font-medium ml-1">
+							(Subscription{item.recurringInterval ? ` / ${item.recurringInterval}` : ''})
+						</span>
+					)}
+					{/* Display price per unit */}
+					<p className="text-sm text-slate-500 mt-0.5">${item.price} each</p> 
 					<button onClick={handleRemove} className="text-xs text-red-500 hover:text-red-700 mt-1 transition-colors duration-200">Remove</button>
 				</div>
 			</div>

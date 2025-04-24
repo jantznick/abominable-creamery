@@ -232,62 +232,55 @@ export const Checkout = () => {
 
     // Effect to fetch Payment Intent client secret
     useEffect(() => {
-        // Ensure cart items are available from context
-        // This payload is for /create-payment-intent, which needs priceId!
-        const cartItemsForPayload = items.map(item => ({
-            priceId: item.priceId, // Correct: Use priceId here
-            quantity: item.quantity
-        }));
-
         if (
             activeSection === 'payment' && 
             !clientSecret && 
             isShippingComplete && 
-            cartItemsForPayload.length > 0
-            // No need to check totalInCents > 0 here, backend calculates total
+            items.length > 0 
         ) {
             setIsLoadingSecret(true);
             setErrorLoadingSecret(null);
-            console.log("Fetching Payment Intent for items:", cartItemsForPayload);
+
+            // --- Prepare data payload for the backend --- 
+            const contactInfo = { email, phone };
+            const shippingAddress = { fullName, address1, address2, city, state, postalCode, country };
+            const payload = {
+                items: items, // Send full cart items
+                contactInfo: contactInfo,
+                shippingAddress: shippingAddress
+            };
+            // ---------------------------------------------
+
             fetch('/api/stripe/create-payment-intent', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                // Send the items array instead of the calculated amount
-                body: JSON.stringify({ items: cartItemsForPayload }), 
+                // Send items AND contact/shipping info
+                body: JSON.stringify(payload)
             })
-            .then(res => {
+            .then(async (res) => {
                 if (!res.ok) {
-                    return res.json().then(err => Promise.reject(err));
+                    const { error } = await res.json().catch(() => ({ error: 'Failed to parse error response.' }));
+                    throw new Error(error || `Server error: ${res.status}`);
                 }
                 return res.json();
             })
-            .then(data => {
-                if (data.clientSecret) {
-                    console.log("Client Secret received");
-                    setClientSecret(data.clientSecret);
-                } else {
-                    throw new Error("Client secret not received");
+            .then((data) => {
+                if (!data.clientSecret) {
+                    throw new Error('Client secret not received from server.');
                 }
+                setClientSecret(data.clientSecret);
             })
-            .catch(error => {
-                console.error("Failed to fetch payment intent:", error);
-                setErrorLoadingSecret(error?.error || 'Failed to initialize payment. Please try again.');
+            .catch((error) => {
+                console.error("Failed to create payment intent:", error);
+                setErrorLoadingSecret(error.message || "Failed to initialize payment.");
             })
             .finally(() => {
                 setIsLoadingSecret(false);
             });
-        } else if (activeSection === 'payment' && cartItemsForPayload.length === 0) {
-             setErrorLoadingSecret('Your cart is empty. Cannot initialize payment.');
-             setIsLoadingSecret(false);
-        } else if (activeSection !== 'payment') {
-            // Reset payment state if navigating away from payment section
-             setClientSecret(null);
-             setIsLoadingSecret(false);
-             setErrorLoadingSecret(null);
         }
-        // Dependencies: Add items directly if CartContext guarantees stable reference, 
-        // otherwise, consider stringifying items or using itemCount for dependency array
-    }, [activeSection, isShippingComplete, items, clientSecret]); // Added items
+    // Include all form state variables used in the payload as dependencies
+    }, [activeSection, clientSecret, isShippingComplete, items, 
+        email, phone, fullName, address1, address2, city, state, postalCode, country]); 
 
     // --- Effect to fetch Saved Addresses ---
     useEffect(() => {

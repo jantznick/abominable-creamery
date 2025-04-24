@@ -4,16 +4,16 @@
 
 ## 1. Overview
 
-This feature allows users to subscribe to receive recurring deliveries of ice cream flavors. The initial frontend work on the product page (`Flavor.tsx`) is complete, allowing users to select a subscription option via a checkbox. This plan outlines the remaining tasks to fully integrate subscriptions into the cart, checkout, and backend systems.
+This feature allows users to subscribe to receive recurring deliveries of ice cream flavors. The initial frontend work on the product page (`Flavor.tsx`) is complete, allowing users to select a subscription option via a checkbox. This plan outlines the remaining tasks to fully integrate subscriptions into the cart, checkout, and backend systems **using Stripe Payment Intents and the Payment Element**. **It includes creating new Order records for each successful subscription renewal.**
 
 ## 2. Key Features & Goals
 
 *   **Product Page:** Allow users to choose between one-time purchase and "Subscribe & Save" for eligible products. (Done)
 *   **Cart:** Visually distinguish subscription items from one-time purchases, showing the recurring interval (e.g., "monthly").
-*   **Checkout:** Handle carts containing both one-time items and subscription items using a single Stripe Checkout session.
-*   **Backend:** Securely create Stripe Checkout sessions reflecting the cart contents.
-*   **Database:** Store subscription details (Stripe IDs, status, interval, linked user) locally.
-*   **Webhooks:** Process Stripe webhooks (specifically `checkout.session.completed`) to create/update local subscription records upon successful checkout.
+*   **Checkout:** Handle carts containing both one-time items and subscription items using the existing embedded Payment Element flow.
+*   **Backend:** Securely create Stripe Payment Intents, handling potential subscriptions by setting `setup_future_usage`. Manually create Stripe Subscriptions after successful payment confirmation via webhooks. **Create new local Order records upon successful subscription renewal.**
+*   **Database:** Store subscription details (Stripe IDs, status, interval, linked user) locally. **Link renewal Orders back to Subscriptions.**
+*   **Webhooks:** Process `payment_intent.succeeded` (for initial order/sub creation) and `invoice.paid` (for renewal order creation).
 
 ## 3. Technical Approach
 
@@ -22,33 +22,45 @@ This feature allows users to subscribe to receive recurring deliveries of ice cr
     *   One-time Prices eligible for subscription will have `metadata.subscriptionId` pointing to the corresponding recurring Stripe Price ID.
     *   Recurring Stripe Prices will have `recurring.interval` set (e.g., 'month').
 *   **Checkout:**
-    *   Utilize **Stripe Checkout Sessions**.
-    *   When the user proceeds to checkout, the backend will create a Checkout Session including:
-        *   `line_items` for one-time purchase products (using Price IDs).
-        *   `line_items` for subscription products (using recurring Price IDs). Stripe automatically detects the `recurring` property and handles the subscription setup.
-        *   Set `mode: 'payment'` (Stripe handles detecting recurring items to enable subscription setup). Alternatively, investigate if `mode: 'subscription'` combined with one-time `line_items` is feasible/better.
-    *   The frontend will redirect the user to the Stripe-hosted Checkout page using the session ID.
-*   **Backend Persistence:**
-    *   A new `Subscription` table will be added to the database (`prisma/schema.prisma`).
-    *   Upon receiving a successful `checkout.session.completed` webhook event from Stripe, the backend will:
-        *   Create corresponding `Order` and `OrderItem` records for the *entire* purchase (as currently done).
-        *   Create a new record in the `Subscription` table containing the `stripeSubscriptionId`, `userId`, `stripePriceId`, `status`, `interval`, etc., extracted from the webhook payload.
+    *   Utilize **Stripe Payment Intents API** with the embedded **Payment Element** on the frontend.
+    *   The frontend checkout flow (`Checkout.tsx`) remains largely the same UI-wise.
+    *   When the user reaches the payment step, the backend's `/api/stripe/create-payment-intent` endpoint will be called.
+    *   If the cart contains *any* subscription item, the Payment Intent must be created with `setup_future_usage: 'on_session'` to save the payment method for the recurring charge.
+    *   A Stripe Customer should be created or retrieved (using email) and associated with the Payment Intent (`customer: customerId`). This is necessary for saving payment methods and creating subscriptions.
+    *   The backend returns the `clientSecret` of the Payment Intent to the frontend.
+    *   The frontend uses the `clientSecret` to confirm the payment via the Payment Element (`stripe.confirmPayment`).
+*   **Backend Subscription Creation & Persistence:**
+    *   A new `Subscription` table will be added to the database (`prisma/schema.prisma`). (Done)
+    *   An optional `subscriptionId` field will be added to the `Order` model to link renewal orders.
+    *   **`payment_intent.succeeded` Webhook:**
+        *   Checks metadata.
+        *   Creates initial `Order` and `OrderItem` records.
+        *   If subscription present, creates Stripe `Subscription` and local `Subscription` record.
+        *   Optionally links the *initial* `Order` to the `Subscription` via `order.subscriptionId`.
+    *   **`invoice.paid` Webhook:**
+        *   Checks if `invoice.billing_reason` is `subscription_cycle` or similar.
+        *   Checks if `invoice.subscription` exists.
+        *   If yes (it's a successful renewal payment):
+            *   Retrieves the associated local `Subscription` record.
+            *   Creates a **new** `Order` record (status `PAID` or similar) linked to the user and the `Subscription` (`order.subscriptionId`).
+            *   Creates corresponding `OrderItem`s based on the subscription.
+            *   Updates the `currentPeriodEnd` on the local `Subscription` record.
 *   **Frontend State:**
     *   `CartContext` stores `isSubscription` and `recurringInterval` flags. (Done)
 
 ## 4. Database Schema Changes (`prisma/schema.prisma`)
 
-*   **Add `Subscription` model:**
+*   **Add `Subscription` model:** (Done)
     ```prisma
     model Subscription {
       id                  String      @id @default(cuid())
-      userId              String
+      userId              Int
       user                User        @relation(fields: [userId], references: [id])
-      stripeSubscriptionId String      @unique // From Stripe event checkout.session.completed -> subscription
-      stripePriceId       String      // The ID of the recurring Stripe Price object
-      status              String      // e.g., "active", "canceled", "incomplete", etc. (Matches Stripe statuses)
-      interval            String      // e.g., "month", "week"
-      currentPeriodEnd    DateTime    // From Stripe event
+      stripeSubscriptionId String      @unique
+      stripePriceId       String
+      status              String
+      interval            String
+      currentPeriodEnd    DateTime
       cancelAtPeriodEnd   Boolean     @default(false)
       createdAt           DateTime    @default(now())
       updatedAt           DateTime    @updatedAt
@@ -56,74 +68,95 @@ This feature allows users to subscribe to receive recurring deliveries of ice cr
       @@index([userId])
     }
     ```
-*   **Add relation to `User` model:**
+*   **Add relation to `User` model:** (Done)
     ```prisma
     model User {
       // ... other fields
       subscriptions Subscription[]
     }
     ```
-*   **(Optional) Consider adding `stripeSubscriptionId` to `OrderItem`:** Add an optional `stripeSubscriptionId String?` field to `OrderItem` if a direct link from the initial order item to the resulting subscription is desired. This might be redundant if the `Subscription` table holds enough info.
+*   **Consider adding Stripe Customer ID to `User` model:** Add `stripeCustomerId String? @unique` to facilitate retrieving customers.
+*   **Add `stripeCustomerId` to `User` model:** (Done)
+*   **Add Optional `subscriptionId` to `Order` model:**
+    ```prisma
+    model Order {
+      // ... other fields
+      subscriptionId String?     // Link to the Subscription if this is a renewal order
+      subscription   Subscription? @relation(fields: [subscriptionId], references: [id])
+      // Optional: Add index if querying orders by subscriptionId
+      // @@index([subscriptionId])
+    }
+    model Subscription {
+      // ... other fields
+      renewalOrders Order[]      // Add relation back to renewal Orders
+    }
+    ```
+*   **(Optional) Consider adding `stripeSubscriptionId` to `OrderItem`:** (Done - commented out)
 
 ## 5. API Changes
 
-*   **`/create-payment-intent` Endpoint:**
-    *   **Rename/Replace:** Replace this with a new endpoint, e.g., `POST /api/checkout/create-session`.
+*   **`/api/stripe/create-payment-intent` Endpoint:**
+    *   **Enhance (Keep Existing):** Modify this endpoint significantly.
     *   **Functionality:**
-        *   Accepts cart items (including subscription flags) from the frontend request.
-        *   Constructs `line_items` array for Stripe Checkout Session, mapping cart items to the correct Stripe Price IDs (using the subscription Price ID for subscribed items).
-        *   Sets appropriate `success_url` and `cancel_url`.
-        *   Creates the Stripe Checkout Session (`stripe.checkout.sessions.create`).
-        *   Returns the `sessionId` to the frontend.
+        *   Accepts cart items (including subscription flags).
+        *   Calculate total amount for the *initial* payment (subscriptions might have free trials or different initial amounts, handle accordingly if applicable - assume standard price for now).
+        *   Check if any item `isSubscription`.
+        *   **If subscription present:**
+            *   Find or create a Stripe Customer based on user email (or session email if guest). Store/update `stripeCustomerId` on local `User` model.
+            *   Set `setup_future_usage: 'on_session'` in `paymentIntents.create`.
+            *   Pass the `customer: customerId` to `paymentIntents.create`.
+        *   Store relevant cart details (including which items are subscriptions and their recurring Price IDs) in the Payment Intent `metadata`. This is crucial for the webhook later.
+        *   Creates the Stripe Payment Intent (`stripe.paymentIntents.create`).
+        *   Returns the `clientSecret` to the frontend.
 *   **`POST /api/webhooks/stripe` Endpoint:**
-    *   **Enhance:** Add a handler for the `checkout.session.completed` event type.
-    *   **Functionality:**
-        *   Verify the webhook signature.
-        *   Parse the `session` object from the event data.
-        *   Retrieve relevant details (customer ID, subscription ID, line items, status, interval, period end, price ID).
-        *   Find or create the corresponding `User` based on `customerId` or `client_reference_id`.
-        *   Create the `Order` and `OrderItem` records (ensure atomicity if possible).
-        *   Create the `Subscription` record in the database using the extracted details.
-        *   Handle potential errors gracefully.
+    *   **Enhance:** Modify handler for `payment_intent.succeeded` (Task 5 - Partially Done - Needs Order Creation Logic).
+    *   **Enhance:** **Add handler for `invoice.paid`** (New part of Task 5).
+    *   **`invoice.paid` Functionality:**
+        *   Verify signature.
+        *   Check `invoice.billing_reason`, `invoice.subscription`, `invoice.paid`.
+        *   Retrieve local `Subscription`.
+        *   Create new `Order` and `OrderItem`s, linking to the `Subscription`.
+        *   Update local `Subscription.currentPeriodEnd`.
+        *   Handle errors.
 
 ## 6. Frontend Changes
 
 *   **`src/pages/Cart.tsx`:**
-    *   Update item rendering to check `item.isSubscription`.
-    *   If true, display "(Subscription)" and the `item.recurringInterval` (e.g., " / month").
-    *   Ensure the "Proceed to Checkout" button triggers the new checkout flow.
+    *   Update item rendering to check `item.isSubscription`. (Task 6 Complete)
+    *   If true, display "(Subscription)" and the `item.recurringInterval`.
+    *   Ensure "Proceed to Checkout" button works with the existing flow (passing cart items).
 *   **`src/pages/Checkout.tsx`:**
-    *   **Major Refactor:** Replace the current Payment Element integration.
-    *   On load or button click ("Proceed to Payment"):
-        *   Send cart details to the new `/api/checkout/create-session` backend endpoint.
-        *   Receive the `sessionId`.
-        *   Use `@stripe/stripe-js` `redirectToCheckout({ sessionId })` method to redirect the user to Stripe.
-    *   Remove existing `/create-payment-intent` call and related Payment Element setup/state.
+    *   Continue using the Payment Element.
+    *   Ensure it correctly calls the *enhanced* `/api/stripe/create-payment-intent` endpoint.
+    *   Handle the `clientSecret` returned and use `stripe.confirmPayment` as before.
 *   **`src/pages/OrderConfirmation.tsx`:**
-    *   Adapt logic to handle the redirect back from Stripe Checkout.
-    *   Stripe redirects to the `success_url` with `session_id={CHECKOUT_SESSION_ID}` in the query parameters.
-    *   On load, retrieve the `session_id`.
-    *   (Optional but recommended) Make a request to a new backend endpoint (e.g., `GET /api/checkout/session-status?session_id=...`) to verify the session payment status on the server before showing the success message. This avoids relying solely on the client being redirected to the success URL. The backend endpoint would use `stripe.checkout.sessions.retrieve(sessionId)`.
-    *   Display success/failure based on the verified session status.
+    *   Logic likely remains similar, confirming `paymentIntent` status using the ID from the URL redirect after `stripe.confirmPayment`. (Verify this flow).
+*   **(New) `src/pages/Admin/OrdersView.tsx` (or similar):**
+    *   No immediate change *required*, renewal orders will appear.
+    *   **Enhancement (Future Task):** Optionally display the linked `subscriptionId` or visually distinguish renewal orders.
+*   **(New) `src/pages/Admin/SubscriptionsView.tsx` (or similar):**
+    *   **New Feature (Future Task):** Create a new view to list and manage `Subscription` records from the database.
 
-## 7. Tasks
+## 7. Tasks (Revised)
 
-*   **Task 1 (Backend):** Define `Subscription` model in `prisma/schema.prisma` and add relation to `User`.
-*   **Task 2 (Backend):** Run `npx prisma migrate dev` to apply schema changes.
-*   **Task 3 (Backend):** Implement `POST /api/checkout/create-session` endpoint logic.
-*   **Task 4 (Backend):** Enhance `POST /api/webhooks/stripe` to handle `checkout.session.completed` event and create `Subscription` records.
-*   **Task 5 (Frontend):** Update `src/pages/Cart.tsx` to visually differentiate subscription items.
-*   **Task 6 (Frontend):** Refactor `src/pages/Checkout.tsx` to call `/api/checkout/create-session` and use `redirectToCheckout`.
-*   **Task 7 (Frontend):** Adapt `src/pages/OrderConfirmation.tsx` to handle redirects from Stripe Checkout and potentially verify session status.
-*   **Task 8 (Testing):** Thoroughly test scenarios:
-    *   One-time purchase only.
-    *   Subscription purchase only.
-    *   Mixed cart (one-time + subscription).
-    *   Webhook processing correctly creates DB records.
-    *   Error handling (e.g., failed payment in Stripe Checkout).
+*   **Task 1 (Backend):** Define `Subscription` model in `prisma/schema.prisma` and add relation to `User`. (Done)
+*   **Task 2 (Backend):** Run `npx prisma migrate dev` to apply schema changes. (Done)
+*   **Task 3 (Backend):** Add `stripeCustomerId` field to `User` model in `prisma/schema.prisma` and migrate.
+*   **Task 4 (Backend):** Add `subscriptionId` relation to `Order` model and migrate.
+*   **Task 5 (Backend):** Enhance `/create-payment-intent`. (Done)
+*   **Task 6 (Backend):** Enhance `/webhook` handler:
+    *   Implement Order Creation logic within `payment_intent.succeeded`.
+    *   **Add `invoice.paid` handler** to create renewal `Order` records and update local `Subscription`.
+*   Task 7 (Frontend): Update `Cart.tsx`. (Done)
+*   Task 8 (Frontend): Verify `Checkout.tsx`. (Done)
+*   Task 9 (Frontend): Verify `OrderConfirmation.tsx`. (Done)
+*   **Task 10 (Testing):** Thoroughly test scenarios (including renewals, webhook processing for renewals, renewal order creation).
+*   **(Future) Task 11 (Admin):** Enhance Admin Order View to show subscription links.
+*   **(Future) Task 12 (Admin):** Create dedicated Admin Subscription Management View.
 
 ## 8. Future Considerations
 
 *   User account page to view/manage active subscriptions (cancel, update payment method via Stripe Customer Portal).
 *   Handling other Stripe subscription webhooks (e.g., `invoice.payment_failed`, `customer.subscription.deleted`) to update local `Subscription` status.
-*   More robust error handling and retry mechanisms for webhook processing. 
+*   More robust error handling and retry mechanisms for webhook processing.
+*   (Same as before + Admin Views) 

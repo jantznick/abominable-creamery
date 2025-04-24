@@ -202,15 +202,31 @@ export const Checkout = () => {
     // Effect to potentially skip auth choice and PREFILL CONTACT/SHIPPING info if already logged in
     useEffect(() => {
         if (activeSection === 'auth_choice' && auth.user && !auth.isLoading) {
-            console.log("User already logged in, skipping auth choice and prefilling fields.");
+            console.log("User logged in. Prefilling fields and advancing to shipping.");
+            
             // Prefill contact info
             setEmail(auth.user.email || '');
-            setPhone(auth.user.phone || ''); // Prefill phone number
+            setPhone(auth.user.phone || ''); 
+            // Pre-validate contact section since email/phone are likely filled
+            const prefilledEmail = auth.user.email || '';
+            const prefilledPhone = auth.user.phone || '';
+            const canPreCompleteContact = prefilledEmail.trim() !== '' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(prefilledEmail);
+             // Note: Removed phone check from pre-completion logic as it might not be required, 
+             // but kept it for the actual continue button validation `canCompleteContact`.
+             // Adjust this if phone is strictly required even when pre-filled.
+
+            if (canPreCompleteContact) {
+                 setIsContactComplete(true);
+                 console.log("Contact section pre-marked as complete.");
+            } else {
+                 setIsContactComplete(false); // Ensure it's false if email somehow isn't valid
+            }
+
             // Optionally prefill name for shipping
             setFullName(auth.user.name || ''); 
             
-            // Move directly to contact section
-            setActiveSection('contact');
+            // Advance directly to shipping section
+            setActiveSection('shipping'); 
         }
     }, [auth.user, auth.isLoading, activeSection]); // Dependencies: auth state and current section
 
@@ -275,6 +291,7 @@ export const Checkout = () => {
 
     // --- Effect to fetch Saved Addresses ---
     useEffect(() => {
+        // Only run if user is logged in and auth state is settled
         if (auth.user && !auth.isLoading) {
             setIsLoadingAddresses(true);
             setErrorLoadingAddresses(null);
@@ -290,17 +307,31 @@ export const Checkout = () => {
                     setSavedAddresses(data);
                     // Check if there's a default shipping address
                     const defaultShipping = data.find(addr => addr.type === 'SHIPPING' && addr.isDefault);
+                    
                     if (defaultShipping) {
-                        // Pre-select default and pre-fill form (excluding fullName)
+                        console.log("Default shipping address found, pre-filling form.");
+                        // Pre-select default and pre-fill form
                         setSelectedAddressId(String(defaultShipping.id));
                         // Keep existing fullName state (pre-filled from auth.user.name earlier)
-                        // setFullName(defaultShipping.fullName || auth.user?.name || ''); // REMOVED
                         setAddress1(defaultShipping.streetAddress);
                         setAddress2(''); // Assuming Address model doesn't have address2 yet
                         setCity(defaultShipping.city);
                         setState(defaultShipping.state);
                         setPostalCode(defaultShipping.postalCode);
                         setCountry(defaultShipping.country);
+
+                        // Check if the contact step is also complete (likely from login prefill)
+                        // If both contact and shipping are effectively complete due to prefill,
+                        // mark shipping complete and advance to payment.
+                        if (isContactComplete) {
+                            console.log("Contact was already complete, marking shipping complete and advancing to payment.")
+                            setIsShippingComplete(true);
+                            setActiveSection('payment');
+                        }
+                    } else {
+                         console.log("No default shipping address found.");
+                         // Ensure we don't advance if no default is used
+                         // setIsShippingComplete(false); // No need, default is false
                     }
                 })
                 .catch(err => {
@@ -311,7 +342,7 @@ export const Checkout = () => {
                     setIsLoadingAddresses(false);
                 });
         }
-    }, [auth.user, auth.isLoading]); // Fetch when user/auth state is known
+    }, [auth.user, auth.isLoading, isContactComplete]); // Add isContactComplete dependency
 
     // Stripe Elements options
     const appearance = { theme: 'stripe' as const };

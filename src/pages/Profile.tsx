@@ -106,7 +106,7 @@ const Profile: React.FC = () => {
                     <p className="text-slate-700"><span className="font-medium text-slate-800">Email:</span> {user.email}</p>
                     <p className="text-slate-700"><span className="font-medium text-slate-800">Name:</span> {user.name || <span className="italic text-slate-500">Not Set</span>}</p>
 					<p className="text-slate-700"><span className="font-medium text-slate-800">Phone:</span> {formatPhoneNumber(user.phone) || <span className="italic text-slate-500">Not Provided</span>}</p>
-                    <p className="text-slate-700"><span className="font-medium text-slate-800">Role:</span> {user.role}</p> 
+                    {isAdmin && <p className="text-slate-700"><span className="font-medium text-slate-800">Role:</span> {user.role}</p>} 
                 </div>
 
                 <AdminOrdersView 

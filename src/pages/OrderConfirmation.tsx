@@ -117,7 +117,7 @@ export const OrderConfirmation = () => {
                     .then(data => {
                         if (data.orderDetails) {
                             setFetchedOrderDetails(data.orderDetails);
-                            setMessage('Subscription confirmed! Your order details are below.'); // More specific message
+                            setMessage('Subscription confirmed! Your order details are below. Please check your account for updates.'); // More specific message
                         } else {
                             // If details not found yet, stick to the generic message
                             setMessage('Your payment method was saved successfully! Your subscription is being finalized and will appear in your account shortly.');
@@ -262,9 +262,7 @@ export const OrderConfirmation = () => {
 
         return (
             <div className="text-center py-10 px-4 sm:px-6 lg:px-8">
-                {/* Status Icon */}
-                <ConfirmationStatusIcon isLoading={isLoading} isSuccess={isSuccess} orderError={orderError} />
-                
+
                 {/* Message */}
                 <ConfirmationMessage isSuccess={isSuccess} message={message} orderError={orderError} />
                 
@@ -282,9 +280,8 @@ export const OrderConfirmation = () => {
         <div className='grow container mx-auto px-4 py-8 md:py-12'>
             {/* Add a more engaging title? Maybe an icon? */}
             <div className="flex justify-center items-center mb-8">
-                 <span className="material-symbols-outlined text-4xl md:text-5xl text-purple-600 mr-3">icecream</span>
                  <h1 className="text-3xl md:text-4xl font-bold text-slate-900">
-                    Order Status
+                    Order Confirmation
                  </h1>
             </div>
             {/* Apply slightly different background/padding */}

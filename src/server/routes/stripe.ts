@@ -6,7 +6,7 @@ import { CartItem } from '../../../src/context/CartContext'; // Adjust path as n
 import { Decimal } from '@prisma/client/runtime/library'; // Import Decimal
 import { SessionUser } from '../types'; // Import SessionUser from the shared types file
 import { saveCheckoutAttempt, getCheckoutAttempt, deleteCheckoutAttempt } from '../utils/checkoutTmpStore';
-import { OrderStatus } from '@prisma/client'; // Import OrderStatus enum if needed for type checking
+import { OrderStatus, Order, OrderItem } from '@prisma/client'; // Import OrderStatus enum and Order/OrderItem types
 
 // Load environment variables
 dotenv.config();
@@ -34,6 +34,11 @@ interface InitiateCheckoutRequest {
 	};
 }
 
+// Define a type for the Order fetched with selected items
+type FetchedOrder = Order & {
+    items: Array<Pick<OrderItem, 'id' | 'productId' | 'productName' | 'quantity' | 'price'>>;
+};
+
 // Define a type for the augmented order item including image URL
 interface OrderItemWithImage {
     id: number;
@@ -44,13 +49,47 @@ interface OrderItemWithImage {
     imageUrl: string | null;
 }
 
+// Helper function to fetch image URLs for multiple product IDs concurrently
+async function getImageUrls(productIds: string[]): Promise<{ [productId: string]: string | null }> {
+    const imageUrlMap: { [productId: string]: string | null } = {};
+
+    if (!productIds || productIds.length === 0) {
+        return imageUrlMap;
+    }
+
+    try {
+        const productPromises = productIds.map(async (id) => {
+            try {
+                const stripeProduct = await stripe!.products.retrieve(id);
+                return { id, imageUrl: stripeProduct?.images?.[0] || null };
+            } catch (prodError: any) {
+                console.warn(`Could not fetch Stripe product ${id}: ${prodError.message}`);
+                // Return null image URL for this ID on error
+                return { id, imageUrl: null }; 
+            }
+        });
+
+        const results = await Promise.all(productPromises);
+
+        results.forEach(result => {
+            imageUrlMap[result.id] = result.imageUrl;
+        });
+
+    } catch (error) {
+        console.error("Error fetching product images in bulk:", error);
+        // Optionally, return an empty map or re-throw, depending on desired handling
+    }
+
+    return imageUrlMap;
+}
+
 const router: Router = express.Router();
 
 // Middleware for raw body specific to webhook
 const stripeWebhookMiddleware = express.raw({ type: 'application/json' });
 
 // GET /api/stripe/payment-intent/:paymentIntentId
-// Retrieves the status of a Stripe PaymentIntent AND attempts to find associated order details with images
+// Retrieves the status of a Stripe PaymentIntent AND attempts to find associated order details (final or temporary) with images
 router.get('/payment-intent/:paymentIntentId', express.json(), async (req: Request, res: Response) => {
     if (!stripe) {
         return res.status(500).json({ error: 'Stripe service is not available.' });
@@ -64,55 +103,105 @@ router.get('/payment-intent/:paymentIntentId', express.json(), async (req: Reque
 
     try {
         const paymentIntent = await stripe!.paymentIntents.retrieve(paymentIntentId);
-        let fetchedOrderFromDb = null;
+        // Explicitly type fetchedOrderFromDb
+        let fetchedOrderFromDb: FetchedOrder | null = null;
+        let finalOrderDetails: any = null; // Keep as any for now as it can hold final or temp structure
         const checkoutAttemptId = paymentIntent.metadata?.checkoutAttemptId;
 
         if (checkoutAttemptId) {
-            console.log(`PI Route: Found checkoutAttemptId ${checkoutAttemptId}, looking for Order...`);
+            console.log(`PI Route: Found checkoutAttemptId ${checkoutAttemptId}, looking for FINAL Order...`);
             fetchedOrderFromDb = await prisma.order.findUnique({
                 where: { checkoutAttemptId: checkoutAttemptId },
                 include: {
                     items: { 
                         select: {
-                            id: true,
-                            productId: true,
-                            productName: true,
-                            quantity: true,
-                            price: true
+                            id: true, productId: true, productName: true, quantity: true, price: true
                         }
                     } 
                 }
             });
-        }
 
-        let finalOrderDetails: any = null; // Initialize as null
-
-        if (fetchedOrderFromDb) {
-            finalOrderDetails = { ...fetchedOrderFromDb, items: [] }; // Copy base order details
-
-            if (fetchedOrderFromDb.items.length > 0) {
-                console.log(`PI Route: Found Order ${fetchedOrderFromDb.id}. Fetching product images...`);
-                // Use explicit type for the augmented items array
-                const itemsWithImages: OrderItemWithImage[] = await Promise.all(
-                    fetchedOrderFromDb.items.map(async (item) => {
-                        let imageUrl: string | null = null;
-                        try {
-                            const stripeProduct = await stripe!.products.retrieve(item.productId);
-                            imageUrl = stripeProduct?.images?.[0] || null; 
-                        } catch (prodError: any) {
-                            console.warn(`Could not fetch Stripe product ${item.productId} for order ${fetchedOrderFromDb.id}: ${prodError.message}`);
-                        }
-                        // Price from DB is already Decimal, no need to parse
-                        return { ...item, price: item.price, imageUrl }; 
-                    })
-                );
-                finalOrderDetails.items = itemsWithImages; // Assign augmented items
-                console.log(`PI Route: Added image URLs to order items.`);
+            if (fetchedOrderFromDb !== null) {
+                // Assign to a new const within the narrowed scope
+                const order = fetchedOrderFromDb;
+                // --- Final Order Found --- 
+                console.log(`PI Route: Found FINAL Order ${order.id}. Fetching images...`);
+                finalOrderDetails = { ...order, items: [] }; 
+                if (order.items.length > 0) {
+                    const productIds = order.items.map(item => item.productId).filter((id): id is string => id !== null);
+                    const imageUrls = await getImageUrls(productIds);
+                    const itemsWithImages = order.items.map(item => ({
+                        ...item,
+                        imageUrl: item.productId ? imageUrls[item.productId] : undefined
+                    }));
+                    finalOrderDetails.items = itemsWithImages;
+                    console.log(`PI Route: Added image URLs to FINAL order items.`);
+                } else {
+                    console.log(`PI Route: Found FINAL Order ${order.id} but it has no items.`);
+                }
             } else {
-                 console.log(`PI Route: Found Order ${fetchedOrderFromDb.id} but it has no items.`);
+                 // --- Final Order NOT Found - Try Temporary Context --- 
+                console.log(`PI Route: FINAL Order not found for ${checkoutAttemptId}. Trying temporary context...`);
+                const tempContext = await getCheckoutAttempt(checkoutAttemptId);
+                if (tempContext) {
+                    console.log(`PI Route: Found temporary context for ${checkoutAttemptId}. Reconstructing summary...`);
+                    const { cartItems } = tempContext;
+                    if (cartItems && Array.isArray(cartItems) && cartItems.length > 0) {
+                        // Fetch images for temporary items
+                        const tempItemsWithImages: OrderItemWithImage[] = await Promise.all(
+                            cartItems.map(async (item: any) => { // Use 'any' for items from JSON
+                                let imageUrl: string | null = null;
+                                try {
+                                    const stripeProduct = await stripe!.products.retrieve(item.productId);
+                                    imageUrl = stripeProduct?.images?.[0] || null;
+                                } catch (prodError: any) {
+                                    console.warn(`Could not fetch Stripe product ${item.productId} for temp context ${checkoutAttemptId}: ${prodError.message}`);
+                                }
+                                // Need to create Decimal for price
+                                const priceDecimal = new Decimal(item.price || 0);
+                                return { 
+                                    id: 0, // No real DB ID for temp item
+                                    productId: item.productId,
+                                    productName: item.productName,
+                                    quantity: item.quantity,
+                                    price: priceDecimal, // Use Decimal
+                                    imageUrl 
+                                }; 
+                            })
+                        );
+                        
+                        // Calculate total from temp items
+                        let tempTotal = new Decimal(0);
+                        tempItemsWithImages.forEach(item => {
+                            tempTotal = tempTotal.plus(item.price.times(item.quantity));
+                        });
+
+                        // Construct the temporary orderDetails object
+                        finalOrderDetails = {
+                            id: 0, // Placeholder ID
+                            status: 'PENDING', // Indicate it's not finalized
+                            totalAmount: tempTotal,
+                            items: tempItemsWithImages,
+                            // Include other fields as needed/available from context, or null/defaults
+                            userId: tempContext.userId,
+                            contactEmail: tempContext.contactInfo.email,
+                            shippingName: tempContext.shippingAddress.fullName,
+                             // Add other fields if OrderSummaryDisplay needs them, else null
+                            createdAt: new Date(), // Placeholder time
+                            updatedAt: new Date(),
+                            checkoutAttemptId: checkoutAttemptId, // Include the ID
+                            isPending: true // Explicit flag 
+                        };
+                        console.log(`PI Route: Reconstructed summary from temporary context.`);
+                    } else {
+                         console.log(`PI Route: Temporary context for ${checkoutAttemptId} has no items.`);
+                    }
+                } else {
+                     console.log(`PI Route: Temporary context for ${checkoutAttemptId} also not found.`);
+                }
             }
-        } else if (checkoutAttemptId) {
-             console.log(`PI Route: Order not found for checkoutAttemptId ${checkoutAttemptId}.`);
+        } else {
+             console.log(`PI Route: No checkoutAttemptId found in PaymentIntent ${paymentIntent.id} metadata.`);
         }
 
         res.status(200).json({
@@ -120,7 +209,7 @@ router.get('/payment-intent/:paymentIntentId', express.json(), async (req: Reque
             amount: paymentIntent.amount,
             currency: paymentIntent.currency,
             id: paymentIntent.id,
-            orderDetails: finalOrderDetails // Send the potentially augmented order details
+            orderDetails: finalOrderDetails // Send final OR reconstructed details
         });
 
     } catch (error: any) {
@@ -133,7 +222,7 @@ router.get('/payment-intent/:paymentIntentId', express.json(), async (req: Reque
 });
 
 // GET /api/stripe/setup-intent/:setupIntentId 
-// Retrieves the status of a Stripe SetupIntent AND attempts to find associated order/subscription details with images
+// Retrieves the status of a Stripe SetupIntent AND attempts to find associated order/subscription details (final or temporary) with images
 router.get('/setup-intent/:setupIntentId', express.json(), async (req: Request, res: Response) => {
     if (!stripe) {
         return res.status(500).json({ error: 'Stripe service is not available.' });
@@ -147,67 +236,110 @@ router.get('/setup-intent/:setupIntentId', express.json(), async (req: Request, 
 
     try {
         const setupIntent = await stripe!.setupIntents.retrieve(setupIntentId);
-        let fetchedOrderFromDb = null;
-        let subscriptionDetails = null;
+        // Explicitly type fetchedOrderFromDb
+        let fetchedOrderFromDb: FetchedOrder | null = null;
+        let subscriptionDetails = null; // Type later if needed
+        let finalOrderDetails: any = null; // Keep as any
         const checkoutAttemptId = setupIntent.metadata?.checkoutAttemptId;
 
         if (checkoutAttemptId) {
-            console.log(`SI Route: Found checkoutAttemptId ${checkoutAttemptId}, looking for Order/Subscription...`);
+            console.log(`SI Route: Found checkoutAttemptId ${checkoutAttemptId}, looking for FINAL Order/Subscription...`);
             fetchedOrderFromDb = await prisma.order.findUnique({
-                 where: { checkoutAttemptId: checkoutAttemptId },
+                where: { checkoutAttemptId: checkoutAttemptId },
                 include: {
                     items: { 
                          select: {
-                            id: true,
-                            productId: true,
-                            productName: true,
-                            quantity: true,
-                            price: true
+                            id: true, productId: true, productName: true, quantity: true, price: true
                         }
                     } 
                 }
             });
-            subscriptionDetails = await prisma.subscription.findFirst({
+             subscriptionDetails = await prisma.subscription.findFirst({
                  where: { checkoutAttemptId: checkoutAttemptId },
             });
-        }
 
-        let finalOrderDetails: any = null; // Initialize as null
-
-        if (fetchedOrderFromDb) {
-            finalOrderDetails = { ...fetchedOrderFromDb, items: [] }; // Copy base order details
-            
-            if (fetchedOrderFromDb.items.length > 0) {
-                 console.log(`SI Route: Found Order ${fetchedOrderFromDb.id}. Fetching product images...`);
-                 // Use explicit type for the augmented items array
-                 const itemsWithImages: OrderItemWithImage[] = await Promise.all(
-                    fetchedOrderFromDb.items.map(async (item) => {
-                        let imageUrl: string | null = null;
-                        try {
-                            const stripeProduct = await stripe!.products.retrieve(item.productId);
-                            imageUrl = stripeProduct?.images?.[0] || null; 
-                        } catch (prodError: any) {
-                            console.warn(`Could not fetch Stripe product ${item.productId} for order ${fetchedOrderFromDb.id}: ${prodError.message}`);
-                        }
-                        return { ...item, price: item.price, imageUrl }; 
-                    })
-                );
-                finalOrderDetails.items = itemsWithImages; // Assign augmented items
-                console.log(`SI Route: Added image URLs to order items.`);
+            if (fetchedOrderFromDb !== null) {
+                // Assign to a new const within the narrowed scope
+                const order = fetchedOrderFromDb;
+                // --- Final Order Found --- 
+                console.log(`SI Route: Found FINAL Order ${order.id}. Fetching images...`);
+                finalOrderDetails = { ...order, items: [] }; 
+                if (order.items.length > 0) {
+                    const productIds = order.items.map(item => item.productId).filter((id): id is string => id !== null);
+                    const imageUrls = await getImageUrls(productIds);
+                    const itemsWithImages = order.items.map(item => ({
+                        ...item,
+                        imageUrl: item.productId ? imageUrls[item.productId] : undefined
+                    }));
+                    finalOrderDetails.items = itemsWithImages;
+                    console.log(`SI Route: Added image URLs to FINAL order items.`);
+                } else {
+                    console.log(`SI Route: Found FINAL Order ${order.id} but it has no items.`);
+                }
+                // Keep subscriptionDetails if found alongside final order
+                 if (subscriptionDetails) console.log(`SI Route: Found FINAL Subscription ${subscriptionDetails.id}`);
             } else {
-                 console.log(`SI Route: Found Order ${fetchedOrderFromDb.id} but it has no items.`);
-            }
-        }
+                // --- Final Order NOT Found - Try Temporary Context --- 
+                console.log(`SI Route: FINAL Order not found for ${checkoutAttemptId}. Trying temporary context...`);
+                const tempContext = await getCheckoutAttempt(checkoutAttemptId);
+                 if (tempContext) {
+                    console.log(`SI Route: Found temporary context for ${checkoutAttemptId}. Reconstructing summary...`);
+                    const { cartItems } = tempContext;
+                    if (cartItems && Array.isArray(cartItems) && cartItems.length > 0) {
+                        // Fetch images for temporary items
+                        const tempItemsWithImages: OrderItemWithImage[] = await Promise.all(
+                             cartItems.map(async (item: any) => {
+                                let imageUrl: string | null = null;
+                                try {
+                                    const stripeProduct = await stripe!.products.retrieve(item.productId);
+                                    imageUrl = stripeProduct?.images?.[0] || null;
+                                } catch (prodError: any) {
+                                    console.warn(`Could not fetch Stripe product ${item.productId} for temp context ${checkoutAttemptId}: ${prodError.message}`);
+                                }
+                                const priceDecimal = new Decimal(item.price || 0);
+                                return { 
+                                    id: 0, productId: item.productId, productName: item.productName,
+                                    quantity: item.quantity, price: priceDecimal, imageUrl 
+                                }; 
+                            })
+                        );
+                        
+                        // Calculate total from temp items
+                        let tempTotal = new Decimal(0);
+                        tempItemsWithImages.forEach(item => {
+                            tempTotal = tempTotal.plus(item.price.times(item.quantity));
+                        });
 
-        if (subscriptionDetails) console.log(`SI Route: Found Subscription ${subscriptionDetails.id}`);
-        if (checkoutAttemptId && (!finalOrderDetails || !subscriptionDetails) ) {
-             console.log(`SI Route: Order or Subscription not found for checkoutAttemptId ${checkoutAttemptId}.`);
+                        // Construct the temporary orderDetails object
+                        finalOrderDetails = {
+                            id: 0, status: 'PENDING', totalAmount: tempTotal,
+                            items: tempItemsWithImages,
+                            userId: tempContext.userId, contactEmail: tempContext.contactInfo.email,
+                            shippingName: tempContext.shippingAddress.fullName,
+                            createdAt: new Date(), updatedAt: new Date(),
+                            checkoutAttemptId: checkoutAttemptId, isPending: true
+                        };
+                        console.log(`SI Route: Reconstructed summary from temporary context.`);
+                        // Subscription details might still be null if webhook hasn't run for sub yet
+                        if (!subscriptionDetails) console.log(`SI Route: Subscription details not found yet for ${checkoutAttemptId}.`);
+                         else console.log(`SI Route: Found FINAL Subscription ${subscriptionDetails.id} alongside temp order context.`);
+                    } else {
+                         console.log(`SI Route: Temporary context for ${checkoutAttemptId} has no items.`);
+                    }
+                 } else {
+                     console.log(`SI Route: Temporary context for ${checkoutAttemptId} also not found.`);
+                     // Also means subscription cannot be found via this ID
+                     if (!subscriptionDetails) console.log(`SI Route: FINAL Subscription also not found for ${checkoutAttemptId}.`);
+                 }
+            }
+        } else {
+             console.log(`SI Route: No checkoutAttemptId found in SetupIntent ${setupIntent.id} metadata.`);
         }
         
         res.status(200).json({
             stripeStatus: setupIntent.status,
             id: setupIntent.id,
-            orderDetails: finalOrderDetails, // Send the potentially augmented order details
+            orderDetails: finalOrderDetails, // Send final OR reconstructed details
             subscriptionDetails: subscriptionDetails
         });
 

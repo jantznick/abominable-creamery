@@ -6,6 +6,7 @@ import { CartItem } from '../../../src/context/CartContext'; // Adjust path as n
 import { Decimal } from '@prisma/client/runtime/library'; // Import Decimal
 import { SessionUser } from '../types'; // Import SessionUser from the shared types file
 import { saveCheckoutAttempt, getCheckoutAttempt, deleteCheckoutAttempt } from '../utils/checkoutTmpStore';
+import { OrderStatus } from '@prisma/client'; // Import OrderStatus enum if needed for type checking
 
 // Load environment variables
 dotenv.config();
@@ -33,13 +34,23 @@ interface InitiateCheckoutRequest {
 	};
 }
 
+// Define a type for the augmented order item including image URL
+interface OrderItemWithImage {
+    id: number;
+    productId: string;
+    productName: string;
+    quantity: number;
+    price: Decimal; // Prisma Decimal type
+    imageUrl: string | null;
+}
+
 const router: Router = express.Router();
 
 // Middleware for raw body specific to webhook
 const stripeWebhookMiddleware = express.raw({ type: 'application/json' });
 
 // GET /api/stripe/payment-intent/:paymentIntentId
-// Retrieves the status of a Stripe PaymentIntent
+// Retrieves the status of a Stripe PaymentIntent AND attempts to find associated order details with images
 router.get('/payment-intent/:paymentIntentId', express.json(), async (req: Request, res: Response) => {
     if (!stripe) {
         return res.status(500).json({ error: 'Stripe service is not available.' });
@@ -52,25 +63,160 @@ router.get('/payment-intent/:paymentIntentId', express.json(), async (req: Reque
     }
 
     try {
-        // Retrieve the PaymentIntent from Stripe
-        const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        const paymentIntent = await stripe!.paymentIntents.retrieve(paymentIntentId);
+        let fetchedOrderFromDb = null;
+        const checkoutAttemptId = paymentIntent.metadata?.checkoutAttemptId;
 
-        // Send back relevant information (e.g., status, amount)
+        if (checkoutAttemptId) {
+            console.log(`PI Route: Found checkoutAttemptId ${checkoutAttemptId}, looking for Order...`);
+            fetchedOrderFromDb = await prisma.order.findUnique({
+                where: { checkoutAttemptId: checkoutAttemptId },
+                include: {
+                    items: { 
+                        select: {
+                            id: true,
+                            productId: true,
+                            productName: true,
+                            quantity: true,
+                            price: true
+                        }
+                    } 
+                }
+            });
+        }
+
+        let finalOrderDetails: any = null; // Initialize as null
+
+        if (fetchedOrderFromDb) {
+            finalOrderDetails = { ...fetchedOrderFromDb, items: [] }; // Copy base order details
+
+            if (fetchedOrderFromDb.items.length > 0) {
+                console.log(`PI Route: Found Order ${fetchedOrderFromDb.id}. Fetching product images...`);
+                // Use explicit type for the augmented items array
+                const itemsWithImages: OrderItemWithImage[] = await Promise.all(
+                    fetchedOrderFromDb.items.map(async (item) => {
+                        let imageUrl: string | null = null;
+                        try {
+                            const stripeProduct = await stripe!.products.retrieve(item.productId);
+                            imageUrl = stripeProduct?.images?.[0] || null; 
+                        } catch (prodError: any) {
+                            console.warn(`Could not fetch Stripe product ${item.productId} for order ${fetchedOrderFromDb.id}: ${prodError.message}`);
+                        }
+                        // Price from DB is already Decimal, no need to parse
+                        return { ...item, price: item.price, imageUrl }; 
+                    })
+                );
+                finalOrderDetails.items = itemsWithImages; // Assign augmented items
+                console.log(`PI Route: Added image URLs to order items.`);
+            } else {
+                 console.log(`PI Route: Found Order ${fetchedOrderFromDb.id} but it has no items.`);
+            }
+        } else if (checkoutAttemptId) {
+             console.log(`PI Route: Order not found for checkoutAttemptId ${checkoutAttemptId}.`);
+        }
+
         res.status(200).json({
-            status: paymentIntent.status,
+            stripeStatus: paymentIntent.status,
             amount: paymentIntent.amount,
             currency: paymentIntent.currency,
             id: paymentIntent.id,
-            // Add any other relevant fields you might need on the frontend
+            orderDetails: finalOrderDetails // Send the potentially augmented order details
         });
 
     } catch (error: any) {
         console.error(`Error fetching Payment Intent ${paymentIntentId}:`, error.message);
-        // Provide a more specific error message if possible
         if (error.type === 'StripeInvalidRequestError') {
              return res.status(404).json({ error: 'Payment Intent not found or invalid ID.' });
         }
         res.status(500).json({ error: 'Failed to retrieve payment intent status.' });
+    }
+});
+
+// GET /api/stripe/setup-intent/:setupIntentId 
+// Retrieves the status of a Stripe SetupIntent AND attempts to find associated order/subscription details with images
+router.get('/setup-intent/:setupIntentId', express.json(), async (req: Request, res: Response) => {
+    if (!stripe) {
+        return res.status(500).json({ error: 'Stripe service is not available.' });
+    }
+
+    const { setupIntentId } = req.params;
+
+    if (!setupIntentId) {
+        return res.status(400).json({ error: 'Missing Setup Intent ID.' });
+    }
+
+    try {
+        const setupIntent = await stripe!.setupIntents.retrieve(setupIntentId);
+        let fetchedOrderFromDb = null;
+        let subscriptionDetails = null;
+        const checkoutAttemptId = setupIntent.metadata?.checkoutAttemptId;
+
+        if (checkoutAttemptId) {
+            console.log(`SI Route: Found checkoutAttemptId ${checkoutAttemptId}, looking for Order/Subscription...`);
+            fetchedOrderFromDb = await prisma.order.findUnique({
+                 where: { checkoutAttemptId: checkoutAttemptId },
+                include: {
+                    items: { 
+                         select: {
+                            id: true,
+                            productId: true,
+                            productName: true,
+                            quantity: true,
+                            price: true
+                        }
+                    } 
+                }
+            });
+            subscriptionDetails = await prisma.subscription.findFirst({
+                 where: { checkoutAttemptId: checkoutAttemptId },
+            });
+        }
+
+        let finalOrderDetails: any = null; // Initialize as null
+
+        if (fetchedOrderFromDb) {
+            finalOrderDetails = { ...fetchedOrderFromDb, items: [] }; // Copy base order details
+            
+            if (fetchedOrderFromDb.items.length > 0) {
+                 console.log(`SI Route: Found Order ${fetchedOrderFromDb.id}. Fetching product images...`);
+                 // Use explicit type for the augmented items array
+                 const itemsWithImages: OrderItemWithImage[] = await Promise.all(
+                    fetchedOrderFromDb.items.map(async (item) => {
+                        let imageUrl: string | null = null;
+                        try {
+                            const stripeProduct = await stripe!.products.retrieve(item.productId);
+                            imageUrl = stripeProduct?.images?.[0] || null; 
+                        } catch (prodError: any) {
+                            console.warn(`Could not fetch Stripe product ${item.productId} for order ${fetchedOrderFromDb.id}: ${prodError.message}`);
+                        }
+                        return { ...item, price: item.price, imageUrl }; 
+                    })
+                );
+                finalOrderDetails.items = itemsWithImages; // Assign augmented items
+                console.log(`SI Route: Added image URLs to order items.`);
+            } else {
+                 console.log(`SI Route: Found Order ${fetchedOrderFromDb.id} but it has no items.`);
+            }
+        }
+
+        if (subscriptionDetails) console.log(`SI Route: Found Subscription ${subscriptionDetails.id}`);
+        if (checkoutAttemptId && (!finalOrderDetails || !subscriptionDetails) ) {
+             console.log(`SI Route: Order or Subscription not found for checkoutAttemptId ${checkoutAttemptId}.`);
+        }
+        
+        res.status(200).json({
+            stripeStatus: setupIntent.status,
+            id: setupIntent.id,
+            orderDetails: finalOrderDetails, // Send the potentially augmented order details
+            subscriptionDetails: subscriptionDetails
+        });
+
+    } catch (error: any) {
+        console.error(`Error fetching Setup Intent ${setupIntentId}:`, error.message);
+        if (error.type === 'StripeInvalidRequestError') {
+             return res.status(404).json({ error: 'Setup Intent not found or invalid ID.' });
+        }
+        res.status(500).json({ error: 'Failed to retrieve setup intent status.' });
     }
 });
 
@@ -214,7 +360,7 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 		// Create Payment Intent with only checkoutAttemptId in metadata
 		const paymentIntent = await stripe.paymentIntents.create({
 				amount: totalAmountCent,
-				currency: 'usd', 
+			currency: 'usd', 
 				automatic_payment_methods: { enabled: true },
 				metadata: { checkoutAttemptId: checkoutAttemptId }, // <-- Use new ID
 				// customer: sessionUser?.stripeCustomerId || undefined, // Optional customer link

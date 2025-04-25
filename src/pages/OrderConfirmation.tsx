@@ -1,9 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 // Removed Stripe imports as status check is now backend-driven
 // import { loadStripe, Stripe } from '@stripe/stripe-js';
 import { AddressFormData } from '../types/data'; // Import address form data type
+// Import OrderData type for fetched details
+import { OrderData } from '../types/data';
+// Import the new components
+import { ConfirmationStatusIcon } from '../components/confirmation/ConfirmationStatusIcon';
+import { ConfirmationMessage } from '../components/confirmation/ConfirmationMessage';
+import { OrderSummaryDisplay } from '../components/confirmation/OrderSummaryDisplay';
+import { ActionButtons } from '../components/confirmation/ActionButtons';
 
 // Removed stripePromise initialization
 
@@ -50,7 +57,10 @@ export const OrderConfirmation = () => {
 
     // State to store retrieved checkoutAttemptId
     const [retrievedCheckoutAttemptId, setRetrievedCheckoutAttemptId] = useState<string | null>(null);
-    // Removed isSubscriptionCheckout state
+    // State to store fetched order details from backend API
+    const [fetchedOrderDetails, setFetchedOrderDetails] = useState<OrderData | null>(null);
+    // State to track the type of confirmation for UI elements
+    const [confirmationType, setConfirmationType] = useState<'subscription' | 'order' | null>(null);
 
     // Get Payment Intent ID from URL
     const paymentIntentId = searchParams.get('payment_intent');
@@ -79,7 +89,7 @@ export const OrderConfirmation = () => {
         }
     }, []); // Empty dependency array ensures this runs only once
 
-    // --- Effect 2: Check Intent Status --- 
+    // --- Effect 2: Check Intent Status & Fetch Order Details --- 
     useEffect(() => {
         const paymentIntentId = searchParams.get('payment_intent');
         const setupIntentId = searchParams.get('setup_intent');
@@ -90,19 +100,61 @@ export const OrderConfirmation = () => {
         // Decide flow based on URL params
         if (setupIntentId) {
             // --- Handle Setup Intent Flow (Subscriptions) --- 
-            // (No changes needed here - logic is based on redirectStatus)
             console.log(`Order Confirmation: Handling SetupIntent ${setupIntentId} with redirect_status: ${redirectStatus}`);
             setIsLoading(true); 
+            // Initial message while we check status/fetch
             setMessage('Processing subscription setup...');
+            setConfirmationType('subscription'); // Assume subscription type
 
             if (redirectStatus === 'succeeded') {
-                setMessage('Your payment method was saved successfully! Your subscription is being finalized via webhook and will appear in your account shortly.');
-                setIsSuccess(true); 
-                setIsLoading(false);
+                // Setup intent succeeded client-side. Set success state immediately.
+                setIsSuccess(true);
+                setMessage('Payment method saved! Fetching final confirmation details...');
+                
+                // Attempt to fetch order details even on success, as webhook might be fast
+                fetch(`/api/stripe/setup-intent/${setupIntentId}`)
+                    .then(res => res.ok ? res.json() : Promise.resolve({ orderDetails: null })) // Resolve gracefully if fetch fails
+                    .then(data => {
+                        if (data.orderDetails) {
+                            setFetchedOrderDetails(data.orderDetails);
+                            setMessage('Subscription confirmed! Your order details are below.'); // More specific message
+                        } else {
+                            // If details not found yet, stick to the generic message
+                            setMessage('Your payment method was saved successfully! Your subscription is being finalized and will appear in your account shortly.');
+                            console.log(`SI ${setupIntentId} succeeded, but order details not yet found via API.`);
+                        }
+                    })
+                    .catch(err => {
+                        // Log error but keep generic success message
+                        console.error("Error fetching setup intent details even after success redirect:", err);
+                         setMessage('Your payment method was saved successfully! Your subscription is being finalized and will appear in your account shortly.');
+                    })
+                    .finally(() => setIsLoading(false)); // Set loading false after fetch attempt
+
             } else {
-                setMessage(`There was an issue setting up your payment method (${redirectStatus}). Please try again or contact support.`);
-                setIsSuccess(false);
-                setIsLoading(false);
+                // Fetch SI status for more detailed error message
+                 setMessage(`Hold on, checking the status of your setup...`);
+                 fetch(`/api/stripe/setup-intent/${setupIntentId}`)
+                    .then(res => res.ok ? res.json() : Promise.reject(new Error(`Setup intent check failed: ${res.statusText}`))) 
+                    .then(data => {
+                         // Even on failure, webhook might have run, so check for details
+                         if (data.orderDetails) setFetchedOrderDetails(data.orderDetails);
+                         // Construct a more informative error message if possible
+                         let errorMsg = `There was an issue setting up your payment method (Status: ${data.stripeStatus || redirectStatus || 'unknown'}). Please try again or contact support.`;
+                         if (data.stripeStatus === 'requires_payment_method') {
+                            errorMsg = 'Setup failed: Invalid payment method. Please update your payment details.'
+                         }
+                         setMessage(errorMsg);
+                         setIsSuccess(false);
+                         setConfirmationType(null);
+                    })
+                    .catch(err => {
+                         console.error("Error fetching setup intent status:", err);
+                         setMessage(`There was an issue setting up your payment method (${redirectStatus || 'unknown'}). Please try again or contact support.`);
+                         setIsSuccess(false);
+                         setConfirmationType(null);
+                    })
+                    .finally(() => setIsLoading(false));
             }
 
         } else if (paymentIntentId) {
@@ -110,9 +162,10 @@ export const OrderConfirmation = () => {
             console.log(`Order Confirmation: Handling PaymentIntent ${paymentIntentId}`);
             setIsLoading(true);
             setOrderError(null);
-            setMessage('Verifying payment...'); 
+            setMessage('Verifying payment and retrieving order details...'); 
+            setConfirmationType('order'); // Assume order type
 
-            // Fetch PI status from backend
+            // Fetch PI status AND order details from enhanced backend endpoint
             fetch(`/api/stripe/payment-intent/${paymentIntentId}`)
                 .then(async (res) => {
                     if (!res.ok) {
@@ -123,57 +176,63 @@ export const OrderConfirmation = () => {
                 })
                 .then((data) => {
                     console.log("Order Confirmation: Received payment intent data:", data);
+                    setFetchedOrderDetails(data.orderDetails || null); // Store order details if returned
                     
-                    switch (data.status) {
+                    switch (data.stripeStatus) { // Check the renamed status field
                         case 'succeeded':
-                            // PI succeeded client-side. Order creation now handled by webhook.
-                            // Just update the message.
-                            setMessage('Payment successful! Your order is being processed and confirmed via webhook.');
+                            if (data.orderDetails) {
+                                setMessage(`Payment successful! Your order #${data.orderDetails.id} is confirmed.`);
+                            } else {
+                                // PI succeeded, but webhook might be slow or failed to find order via attemptId
+                                setMessage('Payment successful! Your order is being finalized and confirmed via webhook.');
+                                console.warn(`PI ${paymentIntentId} succeeded, but order details not found (using checkoutAttemptId: ${retrievedCheckoutAttemptId})`);
+                            }
                             setIsSuccess(true);
-                            // --- REMOVED Order creation fetch call --- 
-                            /* 
-                            if (!retrievedCheckoutData) { ... } // No longer needed
-                            console.log("Creating order..."); 
-                            const orderPayload = { ... }; 
-                            fetch('/api/orders', ...) ... 
-                            */
-                           setIsLoading(false); // Set loading false immediately after success status check
+                            // setConfirmationType('order'); // Already set above
                             break; 
                         case 'processing':
-                            setMessage("Your payment is processing...");
-                            setIsSuccess(null);
-                            setIsLoading(false); 
+                            setMessage("Your payment is processing. We'll confirm your order once payment is complete.");
+                            setIsSuccess(null); 
+                            setConfirmationType(null); // Reset type if not confirmed
                             break;
                         case 'requires_payment_method':
                             setMessage('Payment failed. Please try another payment method.');
+                            setOrderError('Payment was not successful. Please check your payment details or try a different method.'); // Set specific error
                             setIsSuccess(false);
-                            setIsLoading(false); 
+                            setConfirmationType(null);
                             break;
                         default:
-                            setMessage('Unhandled payment status. Please contact support.');
+                             setMessage(`Payment status: ${data.stripeStatus}. Please contact support if this persists.`);
+                             setOrderError('An unexpected payment status occurred. Please contact support.'); // Set specific error
                             setIsSuccess(false);
-                            setIsLoading(false); 
+                            setConfirmationType(null);
                             break;
                     }
                 })
                 .catch(error => {
                     console.error("Error fetching payment status:", error);
                     setMessage(error.message || "Failed to retrieve payment status.");
+                    setOrderError(error.message || "An error occurred while checking your payment status."); // Set specific error
                     setIsSuccess(false);
-                    setIsLoading(false);
+                    setConfirmationType(null);
+                })
+                .finally(() => {
+                     setIsLoading(false);
                 });
         } else {
             // --- No Intent ID Found --- 
             console.error("Order Confirmation: Missing payment_intent OR setup_intent in URL.");
             setMessage("Error: Required payment information is missing from the URL.");
+            setOrderError("Could not find payment information to confirm your order."); // Set specific error
             setIsSuccess(false);
             setIsLoading(false);
+            setConfirmationType(null);
         }
 
     // Removed retrievedCheckoutData from dependency array
     }, [searchParams]); 
 
-    // --- Effect 3: Clear Cart on Success (No changes needed) --- 
+    // --- Effect 3: Clear Cart on Success --- 
     useEffect(() => {
         if (isSuccess === true) {
             console.log("Order Confirmation: Clearing cart due to success state.");
@@ -189,78 +248,47 @@ export const OrderConfirmation = () => {
     }, [isSuccess, retrievedCheckoutData]);
     */
 
+    // --- Refactored renderContent --- 
     const renderContent = () => {
+        // Display loading spinner first
         if (isLoading) {
-            return (
-                <div className="text-center py-16">
-                    <div className="spinner border-t-4 border-indigo-500 border-solid rounded-full w-12 h-12 animate-spin mx-auto mb-4"></div>
-                    <p className="text-xl text-slate-600">{message || 'Loading...'}</p>
-                </div>
-            );
-        }
-
-        // Use orderError state for specific order creation failures
-        if (orderError) {
              return (
                 <div className="text-center py-16">
-                    <span className="material-symbols-outlined text-7xl text-red-500 mb-4">error</span>
-                    <p className="text-xl md:text-2xl font-semibold mb-8 text-red-700">{orderError}</p>
-                    <div className="flex justify-center space-x-4">
-                        <Link
-                            to="/flavors"
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
-                        >
-                            Continue Shopping
-                        </Link>
-                    </div>
+                     <ConfirmationStatusIcon isLoading={true} isSuccess={null} orderError={null} />
+                     <p className="text-xl text-slate-600">{message || 'Loading...'}</p>
                 </div>
             );
         }
 
-        // General success/failure rendering based on isSuccess and message
         return (
-            <div className="text-center py-16">
-                {isSuccess === true && (
-                    <span className="material-symbols-outlined text-7xl text-emerald-500 mb-4">check_circle</span>
-                )}
-                {isSuccess === false && (
-                     <span className="material-symbols-outlined text-7xl text-red-500 mb-4">error</span>
-                )}
-                <p className={`text-xl md:text-2xl font-semibold mb-8 ${isSuccess === false ? 'text-red-700' : 'text-slate-800'}`}>
-                    {message || (isSuccess === false ? 'An unknown error occurred.' : 'Processing...')}
-                </p>
-
-                 {/* --- REMOVED Order Summary --- */}
-                 {/* 
-                 {retrievedCheckoutData && (
-                     <div className="max-w-md mx-auto ..."> ... </div>
-                 )}
-                 */}
-
-                <div className="flex justify-center space-x-4">
-                    {isSuccess === true && (
-                         <Link
-                             to="/profile" 
-                             className="bg-slate-600 hover:bg-slate-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
-                         >
-                             View Account
-                         </Link>
-                    )}
-                    <Link
-                        to="/flavors"
-                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-lg transition-colors duration-300 ease-in-out"
-                    >
-                        Continue Shopping
-                    </Link>
-                </div>
+            <div className="text-center py-10 px-4 sm:px-6 lg:px-8">
+                {/* Status Icon */}
+                <ConfirmationStatusIcon isLoading={isLoading} isSuccess={isSuccess} orderError={orderError} />
+                
+                {/* Message */}
+                <ConfirmationMessage isSuccess={isSuccess} message={message} orderError={orderError} />
+                
+                 {/* Order Summary (Conditionally Rendered) */} 
+                 <OrderSummaryDisplay orderDetails={fetchedOrderDetails} />
+                 
+                {/* Action Buttons */}
+                <ActionButtons isSuccess={isSuccess} confirmationType={confirmationType} />
             </div>
         );
     };
 
+    // --- Main Component Return --- 
     return (
-        <div className='grow container mx-auto px-4 py-8 md:py-16'>
-            <h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-8 text-center">Order Status</h1>
-            <div className="bg-white p-6 md:p-10 rounded-lg shadow-md border border-slate-200">
+        <div className='grow container mx-auto px-4 py-8 md:py-12'>
+            {/* Add a more engaging title? Maybe an icon? */}
+            <div className="flex justify-center items-center mb-8">
+                 <span className="material-symbols-outlined text-4xl md:text-5xl text-purple-600 mr-3">icecream</span>
+                 <h1 className="text-3xl md:text-4xl font-bold text-slate-900">
+                    Order Status
+                 </h1>
+            </div>
+            {/* Apply slightly different background/padding */}
+            <div className="bg-gradient-to-br from-purple-50 via-pink-50 to-indigo-100 p-6 md:p-10 rounded-xl shadow-lg border border-slate-200">
                 {renderContent()}
             </div>
         </div>

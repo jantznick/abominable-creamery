@@ -2,7 +2,7 @@ import React from 'react';
 import classNames from 'classnames';
 import { SectionHeader } from './SectionHeader';
 import { FormInput } from '../ui/FormInput';
-import { Address } from '../../types/data'; // Adjust path as needed
+import { Address } from '../../types/data';
 import { useAuth } from '../../context/AuthContext'; // Need auth context to conditionally show save checkbox
 
 interface ShippingSectionProps {

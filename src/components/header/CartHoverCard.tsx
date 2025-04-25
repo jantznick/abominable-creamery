@@ -27,7 +27,7 @@ export const CartHoverCard: React.FC<CartHoverCardProps> = ({ items, total, item
     return (
         <div className="absolute top-full right-0 w-72 bg-white rounded-lg shadow-xl border border-slate-200 z-50 overflow-hidden">
             <div className="p-4 space-y-3 max-h-60 overflow-y-auto">
-                {itemsToShow.map((item, index) => {
+                {itemsToShow.map((item) => {
                     const priceAsNumber = parseFloat(item.price);
                     const isValidPrice = !isNaN(priceAsNumber);
                     const itemTotal = isValidPrice ? (priceAsNumber * item.quantity).toFixed(2) : 'N/A';

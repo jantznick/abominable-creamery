@@ -1,8 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import classNames from 'classnames'; // For conditional tab styling
-// Import shared types from the new types file
-import { OrderData, OrderItemData, ApiUser } from '../../types/data'; 
+import { OrderData, ApiUser } from '../../types/data'; // Use OrderData which includes items
+// Removed OrderItemData import comment
 import { OrderCard } from '../orders/OrderCard'; // Import the new component
+// Removed date-fns import comment
+// Removed Decimal import comment
 
 // Define props required by this component
 interface AdminOrdersViewProps {
@@ -50,7 +52,6 @@ export const AdminOrdersView: React.FC<AdminOrdersViewProps> = ({
                                 ? 'border-indigo-500 text-indigo-600' 
                                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
                         )}
-                        // Add safety check for length
                         disabled={isLoadingOrders} 
                     >
                         All Orders ({(allOrders || []).length}) 
@@ -64,7 +65,6 @@ export const AdminOrdersView: React.FC<AdminOrdersViewProps> = ({
                                 ? 'border-indigo-500 text-indigo-600' 
                                 : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
                         )}
-                         // Add safety check for length
                         disabled={isLoadingOrders}
                     >
                         My Orders ({myOrders.length})
@@ -78,7 +78,6 @@ export const AdminOrdersView: React.FC<AdminOrdersViewProps> = ({
                     <p className="text-slate-500"><div className="spinner border-t-2 border-indigo-500 border-solid rounded-full w-4 h-4 animate-spin inline-block mr-2"></div>Loading orders...</p>
                 ) : errorLoadingOrders ? (
                     <p className="text-red-600 bg-red-50 p-3 rounded"><span className="font-bold">Error:</span> {errorLoadingOrders}</p>
-                // Add safety check for length
                 ) : ordersToDisplay.length === 0 ? ( 
                     <p className="text-slate-500 bg-slate-50 p-4 rounded">
                         <span className="italic">

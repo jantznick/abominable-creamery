@@ -1,7 +1,5 @@
 import React, { useState, FormEvent, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext'; // Adjusted path
-// Removed PageTitle import
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -15,7 +13,6 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
-  const navigate = useNavigate(); // Keep navigate for redirect after login
 
   // Reset form state when modal opens/closes
   useEffect(() => {
@@ -52,8 +49,6 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
       if (response.ok) {
         login(data.user); // Set user in context
         onClose(); // Close modal on success
-        // Optionally navigate or refresh data, depending on UX needs
-        // navigate('/'); // Removed automatic navigation, parent component can decide
       } else {
         setError(data.message || 'Login failed. Check email and password.');
       }
@@ -119,7 +114,6 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
               required
               disabled={isLoading}
             />
-            {/* Optional: Add Forgot Password link here */}
           </div>
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <button

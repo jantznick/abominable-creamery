@@ -1,7 +1,5 @@
 import React, { useState, FormEvent, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext'; // Adjusted path
-// Removed PageTitle import
 
 interface SignupModalProps {
   isOpen: boolean;
@@ -17,7 +15,6 @@ const SignupModal: React.FC<SignupModalProps> = ({ isOpen, onClose, onSwitchToLo
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
-  const navigate = useNavigate(); // Keep navigate for potential future use, but removed auto-redirect
 
   // Reset form state when modal opens/closes
   useEffect(() => {
@@ -67,7 +64,6 @@ const SignupModal: React.FC<SignupModalProps> = ({ isOpen, onClose, onSwitchToLo
       if (response.ok) {
         login(data.user); // Automatically log in the user after successful signup
         onClose(); // Close the modal
-        // Removed navigate('/')
       } else {
         setError(data.message || 'Signup failed. Please try again.');
       }

@@ -1,24 +1,15 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { useCart, CartItem } from '../context/CartContext';
+import { useNavigate } from 'react-router-dom';
+import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { loadStripe, StripeElementsOptions } from '@stripe/stripe-js';
-import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
+import { StripeElementsOptions } from '@stripe/stripe-js'; // Re-add this import
 import classNames from 'classnames'; // Import classnames for conditional styling
 import { Address, ApiSavedCard } from '../types/data'; // Import shared Address type and ApiSavedCard type
-import { formatPhoneNumber } from '../utils/formatting';
 import { SectionHeader } from '../components/checkout/SectionHeader'; // Import the new component
 import { OrderSummary } from '../components/checkout/OrderSummary'; // Import OrderSummary
 import { ContactSection } from '../components/checkout/ContactSection'; // Import ContactSection
-import { FormInput } from '../components/ui/FormInput'; // <-- Add this import
 import { ShippingSection } from '../components/checkout/ShippingSection'; // Import ShippingSection
 import { PaymentSection } from '../components/checkout/PaymentSection'; // Import PaymentSection
-
-// Load Stripe outside of component rendering to avoid recreating Stripe object on every render
-// Make sure STRIPE_PUBLISHABLE_KEY is defined in your .env and exposed via Webpack DefinePlugin
-const stripePromise = process.env.STRIPE_PUBLISHABLE_KEY 
-    ? loadStripe(process.env.STRIPE_PUBLISHABLE_KEY)
-    : Promise.resolve(null); // Handle case where key might be missing
 
 // Define expected structure for checkout data to be saved
 interface CheckoutData {
@@ -49,7 +40,7 @@ interface CheckoutData {
 type CheckoutSection = 'auth_choice' | 'contact' | 'shipping' | 'payment';
 
 // --- Constants ---
-// const ESTIMATED_TAX_RATE = 0.08; // Example 8% tax rate - REMOVE IF UNUSED
+// Removed unused ESTIMATED_TAX_RATE constant
 
 export const Checkout = () => {
 	const { items, getCartTotal, clearCart } = useCart();
@@ -266,9 +257,7 @@ export const Checkout = () => {
 					setIsLoadingSecret(false);
 				});
 		}
-		// --- Dependencies --- 
-		// Add checkoutAttemptId to dependency array and include all form fields used in payload
-		// Add notes to dependencies
+		// Removed dependency comments
 	}, [activeSection, isShippingComplete, items, clientSecret, checkoutAttemptId, isLoadingSecret, email, phone, fullName, address1, address2, city, state, postalCode, country, notes, selectedCardId, saveNewCardForFuture]);
 
 	// --- Effect to fetch Saved Addresses ---
@@ -504,7 +493,7 @@ export const Checkout = () => {
 					{/* Only show this block if user is not logged in AND it's the initial step */}
 					{!auth.user && activeSection === 'auth_choice' && (
 						<div className="bg-white p-6 rounded-lg shadow-md">
-							{/* ... Auth choice content ... */}
+							{/* Removed Auth choice content placeholder comment */}
 							<h2 className="text-2xl font-semibold text-slate-800 mb-6 text-center">Welcome!</h2>
 							<p className="text-slate-600 text-center mb-6">How would you like to proceed?</p>
 							<div className="flex flex-col sm:flex-row gap-4 justify-center">

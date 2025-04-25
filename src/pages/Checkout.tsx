@@ -7,26 +7,18 @@ import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-
 import classNames from 'classnames'; // Import classnames for conditional styling
 import { Address, ApiSavedCard } from '../types/data'; // Import shared Address type and ApiSavedCard type
 import { formatPhoneNumber } from '../utils/formatting';
+import { SectionHeader } from '../components/checkout/SectionHeader'; // Import the new component
+import { OrderSummary } from '../components/checkout/OrderSummary'; // Import OrderSummary
+import { ContactSection } from '../components/checkout/ContactSection'; // Import ContactSection
+import { FormInput } from '../components/ui/FormInput'; // <-- Add this import
+import { ShippingSection } from '../components/checkout/ShippingSection'; // Import ShippingSection
+import { PaymentSection } from '../components/checkout/PaymentSection'; // Import PaymentSection
 
 // Load Stripe outside of component rendering to avoid recreating Stripe object on every render
 // Make sure STRIPE_PUBLISHABLE_KEY is defined in your .env and exposed via Webpack DefinePlugin
 const stripePromise = process.env.STRIPE_PUBLISHABLE_KEY 
     ? loadStripe(process.env.STRIPE_PUBLISHABLE_KEY)
     : Promise.resolve(null); // Handle case where key might be missing
-
-// Helper component for form inputs
-const FormInput = ({ label, id, ...props }: { label: string; id: string; [key: string]: any }) => (
-    <div>
-        <label htmlFor={id} className="block text-sm font-medium text-slate-700 mb-1">
-            {label}
-        </label>
-        <input
-            id={id}
-            className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2 disabled:bg-slate-100 disabled:cursor-not-allowed"
-            {...props}
-        />
-    </div>
-);
 
 // Define expected structure for checkout data to be saved
 interface CheckoutData {
@@ -53,323 +45,11 @@ interface CheckoutData {
 	};
 }
 
-// --- Checkout Form Component (contains Stripe Elements) ---
-const StripeCheckoutForm = ({ clientSecret, checkoutAttemptId }: { clientSecret: string; checkoutAttemptId: string }) => {
-	const stripe = useStripe();
-	const elements = useElements();
-
-	const [message, setMessage] = useState<string | null>(null);
-	const [isLoading, setIsLoading] = useState(false);
-
-	const handleSubmit = async (e: React.FormEvent) => {
-		e.preventDefault();
-
-		if (!stripe || !elements || !clientSecret || !checkoutAttemptId) {
-			console.error("Stripe.js not loaded, missing client secret, OR missing checkoutAttemptId.");
-			setMessage("Payment system not ready. Please wait or refresh.");
-			return;
-		}
-
-		// --- Save ONLY checkoutAttemptId before confirming payment --- 
-		try {
-			sessionStorage.setItem('checkoutDataForConfirmation', checkoutAttemptId); // Store only the ID
-			console.log("Saved checkoutAttemptId to sessionStorage.");
-		} catch (error) {
-			console.error("Error saving checkoutAttemptId to sessionStorage:", error);
-			setMessage("Error preparing session data. Please try again.");
-			return;
-		}
-
-		setIsLoading(true);
-		setMessage(null);
-
-		let error: { message?: string, type?: string } | null = null;
-
-		// --- Conditionally Confirm Setup or Payment --- 
-		if (clientSecret.startsWith('seti_')) {
-			console.log("Confirming SetupIntent...");
-			const { error: setupError } = await stripe.confirmSetup({
-				elements,
-				confirmParams: {
-					return_url: `${window.location.origin}/order-confirmation`,
-				},
-			});
-			error = setupError || null;
-
-		} else if (clientSecret.startsWith('pi_')) {
-			console.log("Confirming PaymentIntent...");
-			const { error: paymentError } = await stripe.confirmPayment({
-				elements,
-				confirmParams: {
-					return_url: `${window.location.origin}/order-confirmation`,
-				},
-			});
-			error = paymentError || null;
-		} else {
-			console.error("Invalid client secret format:", clientSecret);
-			setMessage("Invalid payment session. Please try again.");
-			setIsLoading(false);
-			return;
-		}
-		// -------------------------------------------
-
-		// Handle result
-		if (error) {
-			if (error.type === "card_error" || error.type === "validation_error") {
-				setMessage(error.message || "An unexpected payment error occurred.");
-			} else {
-				setMessage("An unexpected payment error occurred.");
-			}
-		} else {
-			console.log("Payment/Setup confirmed client-side (likely redirecting)...");
-		}
-
-		setIsLoading(false);
-	};
-
-	return (
-		<form id="payment-form" onSubmit={handleSubmit} className="space-y-4">
-			<PaymentElement id="payment-element" options={{ layout: "tabs" }} />
-			<button
-				disabled={isLoading || !stripe || !elements}
-				id="submit"
-				className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-			>
-				<span id="button-text">
-					{isLoading ? <div className="spinner border-t-2 border-white border-solid rounded-full w-5 h-5 animate-spin mx-auto"></div> : "Pay now"}
-				</span>
-			</button>
-			{/* Show any error or success messages */}
-			{message && <div id="payment-message" className="mt-2 text-center text-red-600 text-sm">{message}</div>}
-		</form>
-	)
-}
-
-// --- New Component for Payment Section Content ---
-interface PaymentSectionContentProps {
-	clientSecret: string;
-	checkoutAttemptId: string;
-	auth: ReturnType<typeof useAuth>; // Get type from hook
-	savedCards: ApiSavedCard[];
-	isLoadingCards: boolean;
-	errorLoadingCards: string | null;
-	selectedCardId: string;
-	handleSelectCard: (event: React.ChangeEvent<HTMLSelectElement>) => void;
-	containsSubscription: boolean;
-	saveNewCardForFuture: boolean;
-	setSaveNewCardForFuture: (value: boolean) => void;
-	total: number; // Pass total for button text
-}
-
-const PaymentSectionContent: React.FC<PaymentSectionContentProps> = ({
-	clientSecret,
-	checkoutAttemptId,
-	auth,
-	savedCards,
-	isLoadingCards,
-	errorLoadingCards,
-	selectedCardId,
-	handleSelectCard,
-	containsSubscription,
-	saveNewCardForFuture,
-	setSaveNewCardForFuture,
-	total
-}) => {
-	const stripe = useStripe();
-	const navigate = useNavigate(); // Need navigate for manual redirect
-
-	// State needed here
-	const [isPayingWithSavedCard, setIsPayingWithSavedCard] = useState(false);
-	const [savedCardPaymentError, setSavedCardPaymentError] = useState<string | null>(null);
-
-	// State for saved card setup processing
-	const [isSettingUpWithSavedCard, setIsSettingUpWithSavedCard] = useState(false);
-	const [savedCardSetupError, setSavedCardSetupError] = useState<string | null>(null);
-
-	// Handler needed here
-	const handlePayWithSavedCard = async () => {
-		if (!stripe || !clientSecret || !selectedCardId || !checkoutAttemptId) {
-			console.error("Missing Stripe, clientSecret, selectedCardId, or checkoutAttemptId for saved card payment.");
-			setSavedCardPaymentError("Payment system not ready or card not selected.");
-			return;
-		}
-
-		// Save checkoutAttemptId before confirming
-		try {
-			sessionStorage.setItem('checkoutDataForConfirmation', checkoutAttemptId);
-			console.log("Saved checkoutAttemptId to sessionStorage.");
-		} catch (error) {
-			console.error("Error saving checkoutAttemptId to sessionStorage:", error);
-			setSavedCardPaymentError("Error preparing session data. Please try again.");
-			return;
-		}
-		
-		setIsPayingWithSavedCard(true);
-		setSavedCardPaymentError(null);
-
-		console.log(`Confirming PaymentIntent ${clientSecret} with saved card ${selectedCardId}`);
-		const { error } = await stripe.confirmCardPayment(clientSecret, {
-			payment_method: selectedCardId,
-		});
-
-		if (error) {
-			console.error("Error confirming saved card payment:", error);
-			setSavedCardPaymentError(error.message || "Failed to process payment with saved card.");
-		} else {
-			console.log("Saved card payment successful (client-side), redirecting manually...");
-			navigate(`/order-confirmation?payment_intent=${clientSecret.split('_secret')[0]}&payment_intent_client_secret=${clientSecret}&redirect_status=succeeded`);
-		}
-
-		setIsPayingWithSavedCard(false);
-	};
-
-	// Handler for confirming SetupIntent with a saved card
-	const handleSetupWithSavedCard = async () => {
-		if (!stripe || !clientSecret || !selectedCardId || !checkoutAttemptId) {
-			console.error("Missing Stripe, clientSecret, selectedCardId, or checkoutAttemptId for saved card setup.");
-			setSavedCardSetupError("Payment system not ready or card not selected.");
-			return;
-		}
-
-		// Save checkoutAttemptId before confirming (still useful for potential debugging/linking)
-		try {
-			sessionStorage.setItem('checkoutDataForConfirmation', checkoutAttemptId);
-			console.log("Saved checkoutAttemptId to sessionStorage for SetupIntent.");
-		} catch (error) {
-			console.error("Error saving checkoutAttemptId to sessionStorage:", error);
-			setSavedCardSetupError("Error preparing session data. Please try again.");
-			return;
-		}
-
-		setIsSettingUpWithSavedCard(true);
-		setSavedCardSetupError(null);
-
-		console.log(`Confirming SetupIntent ${clientSecret} with saved card ${selectedCardId}`);
-		// confirmSetup uses return_url, no need for manual navigation here
-		const { error } = await stripe.confirmSetup({
-			clientSecret,
-			confirmParams: {
-				// Ensure the return URL is the same as the one used in StripeCheckoutForm
-				return_url: `${window.location.origin}/order-confirmation`,
-				payment_method: selectedCardId, // Specify the saved payment method
-			},
-		});
-
-		if (error) {
-			console.error("Error confirming saved card setup:", error);
-			setSavedCardSetupError(error.message || "Failed to confirm payment method setup.");
-		} else {
-			// If successful, Stripe.js redirects automatically via the return_url
-			console.log("Saved card setup successful (client-side), Stripe should redirect...");
-		}
-
-		// Only set loading false if there was an error, otherwise redirect happens
-		if (error) {
-		    setIsSettingUpWithSavedCard(false);
-        }
-	};
-
-	// JSX moved here
-	return (
-		<>
-			{/* --- Saved Card Selection --- */} 
-			{auth.user && (
-				<div className="mb-4">
-					<label htmlFor="saved-card-select" className="block text-sm font-medium text-slate-700 mb-1">
-						Payment Method
-					</label>
-					{isLoadingCards && <p className="text-sm text-slate-500">Loading saved cards...</p>}
-					{errorLoadingCards && <p className="text-sm text-red-600">Error loading cards: {errorLoadingCards}</p>}
-					{!isLoadingCards && (
-						<select 
-							id="saved-card-select"
-							value={selectedCardId}
-							onChange={handleSelectCard}
-							className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2"
-							disabled={savedCards.length === 0}
-						>
-							<option value="">Enter New Card Details</option>
-							{savedCards.map(card => (
-								<option key={card.stripePaymentMethodId} value={card.stripePaymentMethodId}>
-									{card.brand.toUpperCase()} ending in {card.last4} {card.isDefault ? '(Default)' : ''}
-								</option>
-							))}
-						</select>
-					)}
-				</div>
-			)}
-
-			{/* --- Subscription Notification --- */} 
-			{containsSubscription && auth.user && selectedCardId === '' && (
-				<div className="p-3 mb-4 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
-					<span className="font-semibold">Note:</span> Your payment method will be saved for managing your subscription.
-				</div>
-			)}
-
-			{/* --- Stripe Elements / Saved Card Placeholder --- */} 
-			{(!auth.user || selectedCardId === '') ? (
-				// Show Elements if guest or new card selected
-				<StripeCheckoutForm clientSecret={clientSecret} checkoutAttemptId={checkoutAttemptId} />
-			) : (
-				// Show placeholder if logged in and saved card selected
-				<div className="p-4 bg-slate-100 border border-slate-200 rounded-md text-sm text-slate-700 space-y-3">
-					<p>Using saved card: <span className="font-medium">{savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.brand.toUpperCase()} ending in {savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.last4}</span>.</p>
-					<button 
-						// Conditionally call the correct handler
-						onClick={containsSubscription ? handleSetupWithSavedCard : handlePayWithSavedCard} 
-						// Disable button based on appropriate loading state and conditions
-						disabled={
-							(containsSubscription ? isSettingUpWithSavedCard : isPayingWithSavedCard) || 
-							!stripe || 
-							!clientSecret || 
-							!selectedCardId
-						} 
-						className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
-					>
-						{/* Show correct loading spinner */} 
-						{(containsSubscription ? isSettingUpWithSavedCard : isPayingWithSavedCard) ? (
-							<div className="spinner border-t-2 border-white border-solid rounded-full w-5 h-5 animate-spin mx-auto"></div>
-						) : (
-							// Show correct button text
-							containsSubscription ? 
-								'Confirm Payment Method for Subscription' : 
-								`Pay $${total.toFixed(2)} with Saved Card`
-						)}
-					</button>
-					{/* Show correct error message */} 
-					{(containsSubscription ? savedCardSetupError : savedCardPaymentError) && 
-						<p className="text-red-600 text-sm mt-2 text-center">
-							{containsSubscription ? savedCardSetupError : savedCardPaymentError}
-						</p>
-					}
-				</div>
-			)}
-
-			{/* --- Save Card Checkbox --- */} 
-			{auth.user && selectedCardId === '' && !containsSubscription && (
-				<div className="flex items-center mt-4 pt-4 border-t border-slate-200">
-					<input 
-						id="saveNewCardForFuture" 
-						name="saveNewCardForFuture" 
-						type="checkbox" 
-						checked={saveNewCardForFuture} 
-						onChange={(e) => setSaveNewCardForFuture(e.target.checked)} 
-						className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-					/>
-					<label htmlFor="saveNewCardForFuture" className="ml-2 block text-sm text-gray-900">
-						Save this card for future purchases
-					</label>
-				</div>
-			)}
-		</>
-	);
-};
-
 // --- Main Checkout Page Component ---
 type CheckoutSection = 'auth_choice' | 'contact' | 'shipping' | 'payment';
 
 // --- Constants ---
-const ESTIMATED_TAX_RATE = 0.08; // Example 8% tax rate
+// const ESTIMATED_TAX_RATE = 0.08; // Example 8% tax rate - REMOVE IF UNUSED
 
 export const Checkout = () => {
 	const { items, getCartTotal, clearCart } = useCart();
@@ -811,20 +491,6 @@ export const Checkout = () => {
 		auth.user, selectedAddressId, saveNewAddress // Correctly merge dependencies
 	]);
 
-	const renderSectionHeader = (section: CheckoutSection, title: string, isComplete: boolean) => (
-		<div className="flex justify-between items-center mb-4">
-			<h2 className={`text-xl font-semibold ${isComplete && activeSection !== section ? 'text-slate-600' : 'text-slate-800'}`}>{title}</h2>
-			{isComplete && activeSection !== section && (
-				<button
-					onClick={() => handleEditSection(section)}
-					className="text-sm text-indigo-600 hover:underline"
-				>
-					Edit
-				</button>
-			)}
-		</div>
-	);
-
 	return (
 		<div className='grow container mx-auto px-4 py-8 md:py-16'>
 			<h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-8 text-center">Checkout</h1>
@@ -849,200 +515,95 @@ export const Checkout = () => {
 					)}
 
 					{/* === CONTACT INFO STEP === */}
-					{/* Show contact section once past auth choice */}
 					{activeSection !== 'auth_choice' && (
-						<div className="bg-white p-6 rounded-lg shadow-md">
-							{renderSectionHeader('contact', '1. Contact Information', isContactComplete)}
-							{/* Show form if section is active, otherwise show read-only view IF complete */}
-							{activeSection === 'contact' ? (
-								<div className="space-y-4">
-									{/* ... Contact form inputs and button ... */}
-									<FormInput label="Email Address" id="email" type="email" value={email} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} required placeholder="you@example.com" />
-									<FormInput label="Phone Number" id="phone" type="tel" value={phone} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPhone(e.target.value)} required placeholder="(555) 123-4567" />
-									<button type="button" onClick={handleContinueToShipping} disabled={!canCompleteContact} className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed">Continue to Shipping</button>
-								</div>
-							) : isContactComplete ? (
-								<div className="text-slate-600 text-sm">
-									<p>Email: {email}</p>
-									{phone && <p>Phone: {phone}</p>}
-								</div>
-							) : null} {/* Don't show anything if not active and not complete */}
-						</div>
+						<ContactSection 
+							email={email}
+							setEmail={setEmail}
+							phone={phone}
+							setPhone={setPhone}
+							isActive={activeSection === 'contact'}
+							isComplete={isContactComplete}
+							canCompleteContact={canCompleteContact}
+							onContinue={handleContinueToShipping}
+							onEdit={() => handleEditSection('contact')}
+						/>
 					)}
 
 					{/* === SHIPPING INFO STEP === */}
-					{/* Show shipping section once past auth choice */}
 					{activeSection !== 'auth_choice' && (
-						<div className={classNames(
-							"bg-white p-6 rounded-lg shadow-md",
-							{ 'opacity-50 pointer-events-none': !isContactComplete } // Disable based on previous step completion
-						)}
-						>
-							{renderSectionHeader('shipping', '2. Shipping Address', isShippingComplete)}
-							{/* Show form if section is active AND previous is complete, otherwise show read-only view IF this section complete */}
-							{activeSection === 'shipping' && isContactComplete ? (
-								<div className="space-y-4">
-									{/* Saved Address Dropdown */}
-									{auth.user && savedAddresses.length > 0 && (
-										<div className="mb-6 pb-4 border-b border-slate-200">
-											{/* ... Dropdown JSX ... */}
-											<label htmlFor="savedAddress" className="block text-sm font-medium text-slate-700 mb-1">Use a Saved Address</label>
-											<select id="savedAddress" name="savedAddress" value={selectedAddressId} onChange={handleSelectAddress} className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2">
-												<option value="">-- Enter New Address Below --</option>
-												{savedAddresses.filter(addr => addr.type === 'SHIPPING').map(addr => (
-													<option key={addr.id} value={addr.id}> {addr.streetAddress}, {addr.city} {addr.isDefault ? '(Default)' : ''}</option>
-												))}
-											</select>
-											{isLoadingAddresses && <p className="text-sm text-slate-500 mt-1">Loading addresses...</p>}
-											{errorLoadingAddresses && <p className="text-sm text-red-500 mt-1">Error: {errorLoadingAddresses}</p>}
-										</div>
-									)}
-									{/* Manual input fields */}
-									{/* ... Address FormInputs ... */}
-									<FormInput label="Full Name" id="fullName" type="text" value={fullName} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFullName(e.target.value)} required />
-									<FormInput label="Street Address" id="address1" type="text" value={address1} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAddress1(e.target.value)} required />
-									<FormInput label="Apartment, suite, etc. (Optional)" id="address2" type="text" value={address2} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAddress2(e.target.value)} />
-									<FormInput label="City" id="city" type="text" value={city} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCity(e.target.value)} required />
-									<div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-										<FormInput label="Country" id="country" type="text" value={country} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCountry(e.target.value)} required />
-										<FormInput label="State / Province" id="state" type="text" value={state} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setState(e.target.value)} required />
-										<FormInput label="Postal Code" id="postalCode" type="text" value={postalCode} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPostalCode(e.target.value)} required />
-									</div>
-									{/* Save Address Checkbox */}
-									{auth.user && selectedAddressId === '' && (
-										<div className="flex items-center mt-4 pt-4 border-t border-slate-200">
-											{/* ... Checkbox JSX ... */}
-											<input id="saveNewAddress" name="saveNewAddress" type="checkbox" checked={saveNewAddress} onChange={(e) => setSaveNewAddress(e.target.checked)} className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded" />
-											<label htmlFor="saveNewAddress" className="ml-2 block text-sm text-gray-900">Save this address to my profile</label>
-										</div>
-									)}
-									{/* Continue button */}
-									<button type="button" onClick={handleContinueToPayment} disabled={!canCompleteShipping} className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed">
-										Continue to Payment
-									</button>
-								</div>
-							) : isShippingComplete ? (
-								<div className="text-slate-600 text-sm">
-									{/* ... Read-only shipping details ... */}
-									<p>{fullName}</p>
-									<p>{address1}{address2 ? `, ${address2}` : ''}</p>
-									<p>{city}, {state} {postalCode}</p>
-									<p>{country}</p>
-								</div>
-							) : null} {/* Don't show form/details if prerequisites not met */}
-						</div>
+						<ShippingSection 
+							// State Props
+							fullName={fullName}
+							address1={address1}
+							address2={address2}
+							city={city}
+							state={state}
+							postalCode={postalCode}
+							country={country}
+							selectedAddressId={selectedAddressId}
+							saveNewAddress={saveNewAddress}
+							savedAddresses={savedAddresses}
+							isLoadingAddresses={isLoadingAddresses}
+							errorLoadingAddresses={errorLoadingAddresses}
+							isActive={activeSection === 'shipping'}
+							isComplete={isShippingComplete}
+							canCompleteShipping={canCompleteShipping}
+							isContactComplete={isContactComplete}
+							// Setter Props
+							setFullName={setFullName}
+							setAddress1={setAddress1}
+							setAddress2={setAddress2}
+							setCity={setCity}
+							setState={setState}
+							setPostalCode={setPostalCode}
+							setCountry={setCountry}
+							setSaveNewAddress={setSaveNewAddress}
+							// Handler Props
+							handleSelectAddress={handleSelectAddress}
+							onContinue={handleContinueToPayment}
+							onEdit={() => handleEditSection('shipping')}
+						/>
 					)}
 
 					{/* === PAYMENT STEP === */}
-					{/* Show payment section once past auth choice */}
 					{activeSection !== 'auth_choice' && (
-						<div className={classNames(
-							"bg-white p-6 rounded-lg shadow-md",
-							{ 'opacity-50 pointer-events-none': !isShippingComplete }
-						)}
-						>
-							{renderSectionHeader('payment', '3. Payment', false)}
-							<div className="mb-6">
-								<label htmlFor="orderNotes" className="block text-sm font-medium text-slate-700 mb-1">
-									Order Notes (Optional)
-								</label>
-								<textarea
-									id="orderNotes"
-									name="orderNotes"
-									rows={5}
-									value={notes}
-									onChange={(e) => setNotes(e.target.value)}
-									className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2"
-									placeholder="Add any special instructions or notes for your order..."
-								/>
-							</div>
-
-							{/* Show Payment content IF this section is active AND previous is complete */}
-							{activeSection === 'payment' && isShippingComplete ? (
-								<div className="space-y-4">
-									{/* Loading/Error for client secret */}
-									{isLoadingSecret && <p className="text-center text-slate-500"><div className="spinner border-t-2 border-indigo-500 border-solid rounded-full w-5 h-5 animate-spin mx-auto mb-2"></div>Initializing payment...</p>}
-									{errorLoadingSecret && <p className="text-center text-red-600">{errorLoadingSecret}</p>}
-									{!clientSecret && !checkoutAttemptId && !isLoadingSecret && !errorLoadingSecret && (
-										<p className="text-center text-red-600">Failed to initialize payment session. Please refresh or contact support.</p>
-									)}
-
-									{/* Render Elements provider only when client secret is ready */} 
-									{clientSecret && checkoutAttemptId && stripePromise && options && (
-										<Elements options={options} stripe={stripePromise}>
-											{/* Render the new content component */} 
-											<PaymentSectionContent
-												clientSecret={clientSecret}
-												checkoutAttemptId={checkoutAttemptId}
-												auth={auth}
-												savedCards={savedCards}
-												isLoadingCards={isLoadingCards}
-												errorLoadingCards={errorLoadingCards}
-												selectedCardId={selectedCardId}
-												handleSelectCard={handleSelectCard}
-												containsSubscription={containsSubscription}
-												saveNewCardForFuture={saveNewCardForFuture}
-												setSaveNewCardForFuture={setSaveNewCardForFuture}
-												total={total}
-											/>
-										</Elements> 
-									)}
-								</div> // End conditional content div
-							) : null} {/* Don't show payment form if prerequisites not met */}
-						</div> // End payment step div
+						<PaymentSection
+							// Section State
+							notes={notes}
+							setNotes={setNotes}
+							isActive={activeSection === 'payment'}
+							isShippingComplete={isShippingComplete}
+							// Intent State
+							clientSecret={clientSecret}
+							checkoutAttemptId={checkoutAttemptId}
+							isLoadingSecret={isLoadingSecret}
+							errorLoadingSecret={errorLoadingSecret}
+							// Payment Content Props
+							auth={auth}
+							savedCards={savedCards}
+							isLoadingCards={isLoadingCards}
+							errorLoadingCards={errorLoadingCards}
+							selectedCardId={selectedCardId}
+							handleSelectCard={handleSelectCard}
+							containsSubscription={containsSubscription}
+							saveNewCardForFuture={saveNewCardForFuture}
+							setSaveNewCardForFuture={setSaveNewCardForFuture}
+							total={total}
+						/>
 					)}
 				</div>
 
 				{/* Order Summary Column */}
 				<div className="lg:col-span-1">
-					<div className="bg-slate-50 p-6 rounded-lg shadow-md sticky top-24">
-						<h2 className="text-xl font-semibold text-slate-800 mb-6 border-b border-slate-200 pb-3">Order Summary</h2>
-
-						{/* Cart Items Mini View */}
-						<div className="space-y-4 mb-6 max-h-60 overflow-y-auto">
-							{items.map((item) => {
-								const itemPrice = parseFloat(item.price);
-								const itemTotal = !isNaN(itemPrice) ? (itemPrice * item.quantity).toFixed(2) : 'Invalid';
-								return (
-									<div key={item.productId} className="flex justify-between items-center text-sm">
-										<span className="flex-1 mr-2">{item.name} ({item.quantity})</span>
-										<span className="text-slate-700 font-medium">${itemTotal}</span>
-									</div>
-								);
-							})}
-							{items.length === 0 && <p className="text-slate-500 text-sm text-center">(Your cart is empty)</p>}
-						</div>
-
-						{/* Cost Breakdown */}
-						<div className="space-y-2 border-t border-slate-200 pt-4">
-							<div className="flex justify-between text-sm text-slate-600">
-								<span>Subtotal</span>
-								<span>${subtotal.toFixed(2)}</span>
-							</div>
-							<div className="flex justify-between text-sm text-slate-600">
-								<span>Shipping</span>
-								{/* Show loading indicator or error for shipping */}
-								{isLoadingShippingRate ? (
-									<span className="italic text-slate-400">Loading...</span>
-								) : errorLoadingShippingRate ? (
-									<span className="text-red-500 text-xs">Error</span> // Or display fallback price
-								) : (
-									<span>${shippingCost.toFixed(2)}</span>
-								)}
-							</div>
-							{/* Tax Row Removed */}
-							<div className="flex justify-between text-lg font-bold text-slate-900 border-t border-slate-300 pt-3 mt-3">
-								<span>Total</span>
-								{/* Show loading for total as well */}
-								{isLoadingShippingRate ? (
-									<span className="italic text-slate-400">Calculating...</span>
-								) : (
-									<span>${total.toFixed(2)}</span>
-								)}
-							</div>
-						</div>
-
-					</div>
+					{/* Use OrderSummary component */}
+					<OrderSummary 
+						items={items}
+						subtotal={subtotal}
+						shippingCost={shippingCost}
+						total={total}
+						isLoadingShippingRate={isLoadingShippingRate}
+						errorLoadingShippingRate={errorLoadingShippingRate}
+					/>
 				</div>
 
 			</div>

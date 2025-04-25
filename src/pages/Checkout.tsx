@@ -1,17 +1,14 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { StripeElementsOptions } from '@stripe/stripe-js'; // Re-add this import
-import classNames from 'classnames'; // Import classnames for conditional styling
-import { Address, ApiSavedCard } from '../types/data'; // Import shared Address type and ApiSavedCard type
-import { SectionHeader } from '../components/checkout/SectionHeader'; // Import the new component
-import { OrderSummary } from '../components/checkout/OrderSummary'; // Import OrderSummary
-import { ContactSection } from '../components/checkout/ContactSection'; // Import ContactSection
-import { ShippingSection } from '../components/checkout/ShippingSection'; // Import ShippingSection
-import { PaymentSection } from '../components/checkout/PaymentSection'; // Import PaymentSection
+import { StripeElementsOptions } from '@stripe/stripe-js'; 
+import { Address, ApiSavedCard } from '../types/data'; 
+import { OrderSummary } from '../components/checkout/OrderSummary'; 
+import { ContactSection } from '../components/checkout/ContactSection'; 
+import { ShippingSection } from '../components/checkout/ShippingSection'; 
+import { PaymentSection } from '../components/checkout/PaymentSection';
 
-// Define expected structure for checkout data to be saved
 interface CheckoutData {
 	items: {
 		// Use productId to match backend OrderItemSchema
@@ -38,9 +35,6 @@ interface CheckoutData {
 
 // --- Main Checkout Page Component ---
 type CheckoutSection = 'auth_choice' | 'contact' | 'shipping' | 'payment';
-
-// --- Constants ---
-// Removed unused ESTIMATED_TAX_RATE constant
 
 export const Checkout = () => {
 	const { items, getCartTotal, clearCart } = useCart();

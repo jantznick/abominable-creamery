@@ -47,8 +47,8 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
       const data = await response.json();
 
       if (response.ok) {
-        login(data.user); // Set user in context
-        onClose(); // Close modal on success
+        login(data.user); 
+        onClose(); 
       } else {
         setError(data.message || 'Login failed. Check email and password.');
       }
@@ -61,8 +61,8 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
   };
 
   const handleSwitch = () => {
-    onClose(); // Close this modal first
-    onSwitchToSignup(); // Then open the other one
+    onClose(); 
+    onSwitchToSignup(); 
   }
 
   if (!isOpen) {

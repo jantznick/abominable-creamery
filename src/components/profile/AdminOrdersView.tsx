@@ -1,12 +1,9 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import classNames from 'classnames'; // For conditional tab styling
-import { OrderData, ApiUser } from '../../types/data'; // Use OrderData which includes items
-// Removed OrderItemData import comment
-import { OrderCard } from '../orders/OrderCard'; // Import the new component
-// Removed date-fns import comment
-// Removed Decimal import comment
+import React, { useState, useMemo } from 'react';
+import classNames from 'classnames'; 
+import { OrderData, ApiUser } from '../../types/data'; 
+import { OrderCard } from '../orders/OrderCard'; 
 
-// Define props required by this component
+
 interface AdminOrdersViewProps {
     user: ApiUser; 
     allOrders: OrderData[] | undefined; // Acknowledge it might be undefined initially

@@ -1,6 +1,6 @@
 const webpack = require('webpack');
 const nodeExternals = require('webpack-node-externals');
-require('dotenv').config(); // Load .env file
+require('dotenv').config(); 
 
 const use = {
 	test: /\.(tsx|ts)$/,

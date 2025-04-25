@@ -32,6 +32,7 @@ interface InitiateCheckoutRequest {
 		postalCode: string;
 		country: string;
 	};
+	notes?: string; // Add optional notes field
 }
 
 // Define a type for the Order fetched with selected items
@@ -358,7 +359,8 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 		return res.status(500).send({ error: 'Stripe is not configured.' });
 	}
 
-	const { items, contactInfo, shippingAddress } = req.body as InitiateCheckoutRequest;
+	// Destructure notes from the request body
+	const { items, contactInfo, shippingAddress, notes } = req.body as InitiateCheckoutRequest;
 	const sessionUser = req.session.user as SessionUser | undefined;
 
 	// --- Basic Validations (keep existing) ---
@@ -424,6 +426,7 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 			cartItems: detailedCartItems,
 			contactInfo: contactInfo,
 			shippingAddress: shippingAddress,
+			notes: notes // Include notes in the context object
 		};
 		// --- Removed contextString = JSON.stringify(checkoutContext); ---
 
@@ -560,159 +563,255 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 			const setupIntent = event.data.object as Stripe.SetupIntent;
 			console.log(`---> Handling ${event.type} for SetupIntent ID: ${setupIntent.id}`);
 
-			// --- Re-enabled Logic Using Temporary Store ---
-			try {
-				// --- 1. Extract data from SetupIntent --- 
-				const customerId = typeof setupIntent.customer === 'string' ? setupIntent.customer : null;
-				const paymentMethodId = typeof setupIntent.payment_method === 'string' ? setupIntent.payment_method : null;
-				// Get checkoutAttemptId from metadata
-				const checkoutAttemptId = setupIntent.metadata?.checkoutAttemptId;
+			// --- Extract common data --- 
+			const customerId = typeof setupIntent.customer === 'string' ? setupIntent.customer : null;
+			const paymentMethodId = typeof setupIntent.payment_method === 'string' ? setupIntent.payment_method : null;
+			const metadata = setupIntent.metadata;
 
-				// --- 2. Validate extracted data --- 
-				if (!customerId || !paymentMethodId) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing customer ID or payment method ID.`);
-					break; // Cannot proceed without customer/payment method
-				}
-				if (!checkoutAttemptId) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing checkoutAttemptId metadata.`);
-					break; // Cannot proceed without context ID
-				}
-
-				// --- 3. Retrieve Context from Temporary Store --- 
-				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Retrieving context using ID: ${checkoutAttemptId}`);
-				const context = await getCheckoutAttempt(checkoutAttemptId);
-
-				if (!context) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Failed to retrieve checkout context for ID: ${checkoutAttemptId}. Data might have expired or been deleted.`);
-					// Potentially log more details or send an alert
-					break; // Cannot proceed without context
-				}
-				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Successfully retrieved context.`);
-
-				const { userId, cartItems, contactInfo, shippingAddress } = context;
-
-				if (!userId || !cartItems || !Array.isArray(cartItems) || cartItems.length === 0 || !contactInfo || !shippingAddress) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Invalid context structure retrieved for ID: ${checkoutAttemptId}.`);
-					break;
-				}
-
-				// --- 4. Prepare for Stripe Subscription Creation (using retrieved context) --- 
-				const subscriptionItems = cartItems
-					.filter((item: any) => item.isSubscription)
-					.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
-
-				const oneTimeItems = cartItems
-					.filter((item: any) => !item.isSubscription)
-					.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
-
-				if (subscriptionItems.length === 0) {
-					console.warn(`Webhook (SetupIntent Succeeded ${setupIntent.id}): No subscription items found in context ID: ${checkoutAttemptId}. Skipping subscription creation.`);
-					// If no subscription items, maybe attempt to delete the attempt data?
-					await deleteCheckoutAttempt(checkoutAttemptId);
-					break;
-				}
-
-				const subscriptionCreateParams: Stripe.SubscriptionCreateParams = {
-					customer: customerId,
-					items: subscriptionItems,
-					default_payment_method: paymentMethodId,
-					metadata: { userId: String(userId) } // Pass userId along to sub metadata too
-				};
-
-				if (oneTimeItems.length > 0) {
-					subscriptionCreateParams.add_invoice_items = oneTimeItems;
-				}
-
-				// --- 5. Create Stripe Subscription --- 
-				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Attempting to create Stripe Subscription...`);
-				const stripeSubscription = await stripe.subscriptions.create(subscriptionCreateParams);
-				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Created Stripe Subscription ${stripeSubscription.id}`);
-
-				// --- 6. Create Local Records in Transaction --- 
-				try {
-					await prisma.$transaction(async (tx) => {
-						console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): Starting DB transaction...`);
-						
-						// a) Create Subscription Record
-						const subEndDateRaw = (stripeSubscription as any).current_period_end;
-						const subEndDate = typeof subEndDateRaw === 'number' ? new Date(subEndDateRaw * 1000) : undefined;
-						const firstSubItemContext = cartItems.find((item: any) => item.isSubscription);
-						
-						const newLocalSub = await tx.subscription.create({
-							data: {
-								userId: userId,
-								stripeSubscriptionId: stripeSubscription.id,
-								stripePriceId: firstSubItemContext?.priceId || 'unknown',
-								status: stripeSubscription.status,
-								interval: firstSubItemContext?.recurringInterval || 'unknown',
-								currentPeriodEnd: subEndDate,
-								cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
-								collectionPaused: (stripeSubscription as any).pause_collection?.behavior === 'void',
-								checkoutAttemptId: checkoutAttemptId // <-- Save the ID
-							}
-						});
-						console.log(`        Created local Subscription record: ${newLocalSub.id}`);
-
-						// b) Create Order Record (linking to subscription)
-						let orderTotalAmount = 0;
-						cartItems.forEach((item: any) => {
-							const price = parseFloat(item.price);
-							if (!isNaN(price)) {
-								orderTotalAmount += price * item.quantity;
-							}
-						});
-						const totalAmountDecimal = new Decimal(orderTotalAmount.toFixed(2));
-						
-						const newOrder = await tx.order.create({
-							data: {
-								userId: userId,
-								subscriptionId: newLocalSub.id,
-								totalAmount: totalAmountDecimal, 
-								// Use OrderStatus enum value
-								status: 'PAID', // Assume PAID because SetupIntent succeeded
-								contactEmail: contactInfo.email,
-								contactPhone: contactInfo.phone || null,
-								shippingName: shippingAddress.fullName,
-								shippingAddress1: shippingAddress.address1,
-								shippingAddress2: shippingAddress.address2 || null,
-								shippingCity: shippingAddress.city,
-								shippingState: shippingAddress.state,
-								shippingPostalCode: shippingAddress.postalCode,
-								shippingCountry: shippingAddress.country,
-								checkoutAttemptId: checkoutAttemptId, // <-- Save the ID
-								items: {
-									create: cartItems.map((item: any) => ({
-										productId: item.productId,
-										productName: item.productName || 'Unknown',
-										quantity: item.quantity,
-										price: new Decimal(item.price || 0), 
-									})),
-								},
-							},
-							select: { id: true }
-						});
-						console.log(`        Created local Order record: ${newOrder.id} linked to Sub ${newLocalSub.id}`);
-					
-					}); // End Transaction
-					console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): DB transaction completed.`);
-				
-					// --- 7. Delete Temporary Context Data --- 
-					console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): Deleting temporary context ID: ${checkoutAttemptId}`);
-					await deleteCheckoutAttempt(checkoutAttemptId);
-					console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): Temporary context deleted.`);
-				
-				} catch (txError) {
-					console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): DB transaction failed:`, txError);
-					// If the transaction fails, the Stripe subscription still exists.
-					// Also, the temporary context data was NOT deleted.
-					// Need robust error handling / retry / notification logic here.
-				}
-
-			} catch (error) {
-				console.error(`Webhook Error (SetupIntent Succeeded ${setupIntent.id}): Error processing event:`, error);
-				// Don't send 500 to Stripe unless it's a webhook signature issue
+			if (!customerId || !paymentMethodId) {
+				console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing customer ID or payment method ID.`);
+				break; // Cannot proceed
 			}
-			// --- End Re-enabled Logic ---
+
+			// --- Determine the source/purpose of the SetupIntent --- 
+
+			// Scenario 1: Saving a card from profile or a "save card" checkbox (identified by source metadata)
+			if (metadata?.source === 'save_card_profile') {
+				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Detected source 'save_card_profile'. Saving card.`);
+				
+				try {
+					const userIdString = metadata.userId; // Get userId from metadata we added
+					if (!userIdString) {
+						console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Missing userId in metadata for source 'save_card_profile'.`);
+						break;
+					}
+					const userId = parseInt(userIdString, 10);
+					if (isNaN(userId)) {
+						console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Invalid userId '${userIdString}' in metadata.`);
+						break;
+					}
+
+					// 1. Retrieve PaymentMethod details from Stripe
+					const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+					if (!paymentMethod.card) {
+						console.error(`Webhook (SetupIntent Succeeded ${setupIntent.id}): PaymentMethod ${paymentMethodId} is not a card.`);
+						break;
+					}
+
+					// 2. Attach PaymentMethod to Customer (idempotent)
+					// It might already be attached if usage was 'on_session', but attaching ensures it's reusable.
+					await stripe.paymentMethods.attach(paymentMethodId, { customer: customerId });
+					console.log(`    Attached PaymentMethod ${paymentMethodId} to Customer ${customerId}.`);
+
+					// 3. Check if card already exists locally to avoid duplicates
+					const existingLocalCard = await prisma.savedCard.findUnique({
+						where: { stripePaymentMethodId: paymentMethodId },
+					});
+
+					if (existingLocalCard) {
+						console.log(`    Webhook (SetupIntent Succeeded ${setupIntent.id}): SavedCard with Stripe PM ID ${paymentMethodId} already exists. Skipping creation.`);
+					} else {
+						// 4. Create SavedCard record locally
+						const newSavedCard = await prisma.savedCard.create({
+							data: {
+								userId: userId,
+								stripePaymentMethodId: paymentMethodId,
+								brand: paymentMethod.card.brand,
+								last4: paymentMethod.card.last4,
+								expMonth: paymentMethod.card.exp_month,
+								expYear: paymentMethod.card.exp_year,
+								isDefault: false, // Set default logic handled by separate endpoint/user action
+							}
+						});
+						console.log(`    Created local SavedCard record: ${newSavedCard.id} for user ${userId}.`);
+						
+						// Optional: Set as default if it's the first card for the user
+						const userCardCount = await prisma.savedCard.count({ where: { userId: userId } });
+						if (userCardCount === 1) {
+							await prisma.savedCard.update({
+								where: { id: newSavedCard.id },
+								data: { isDefault: true }
+							});
+							await stripe.customers.update(customerId, { invoice_settings: { default_payment_method: paymentMethodId } });
+							console.log(`    Set ${paymentMethodId} as default for customer ${customerId} as it's the first card.`);
+						}
+					}
+
+				} catch (error) {
+					console.error(`Webhook Error (SetupIntent Succeeded ${setupIntent.id}, source: save_card_profile): Error processing event:`, error);
+					// Handle specific errors if necessary
+				}
+				
+			// Scenario 2: SetupIntent linked to a checkout attempt (Subscription flow)
+			} else if (metadata?.checkoutAttemptId) {
+				const checkoutAttemptId = metadata.checkoutAttemptId;
+				console.log(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Detected checkoutAttemptId '${checkoutAttemptId}'. Processing subscription/order flow.`);
+				
+				// --- Existing Logic Using Temporary Store for Subscriptions --- 
+				try {
+					// --- 1. Retrieve Context from Temporary Store --- 
+					console.log(`    Retrieving context using ID: ${checkoutAttemptId}`);
+					const context = await getCheckoutAttempt(checkoutAttemptId);
+
+					if (!context) {
+						console.error(`    Failed to retrieve checkout context for ID: ${checkoutAttemptId}. Data might have expired or been deleted.`);
+						break; // Cannot proceed without context
+					}
+					console.log(`    Successfully retrieved context.`);
+
+					const { userId, cartItems, contactInfo, shippingAddress } = context;
+
+					if (!userId || !cartItems || !Array.isArray(cartItems) || cartItems.length === 0 || !contactInfo || !shippingAddress) {
+						console.error(`    Invalid context structure retrieved for ID: ${checkoutAttemptId}.`);
+						break;
+					}
+
+					// --- 2. Prepare for Stripe Subscription Creation (using retrieved context) --- 
+					// (Keep existing logic for subscription/one-time items)
+					const subscriptionItems = cartItems
+						.filter((item: any) => item.isSubscription)
+						.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
+
+					const oneTimeItems = cartItems
+						.filter((item: any) => !item.isSubscription)
+						.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
+
+					if (subscriptionItems.length === 0) {
+						console.warn(`    No subscription items found in context ID: ${checkoutAttemptId}. Skipping subscription creation.`);
+						await deleteCheckoutAttempt(checkoutAttemptId);
+						break;
+					}
+
+					const subscriptionCreateParams: Stripe.SubscriptionCreateParams = {
+						customer: customerId,
+						items: subscriptionItems,
+						default_payment_method: paymentMethodId,
+						metadata: { userId: String(userId) } // Pass userId along to sub metadata too
+					};
+					if (oneTimeItems.length > 0) {
+						subscriptionCreateParams.add_invoice_items = oneTimeItems;
+					}
+
+					// --- 3. Create Stripe Subscription --- 
+					console.log(`    Attempting to create Stripe Subscription...`);
+					const stripeSubscription = await stripe.subscriptions.create(subscriptionCreateParams);
+					console.log(`    Created Stripe Subscription ${stripeSubscription.id}`);
+
+					// --- 4. Create Local Records (Order, Subscription, AND SavedCard) in Transaction --- 
+					try {
+						await prisma.$transaction(async (tx) => {
+							console.log(`        Starting DB transaction...`);
+							
+							// a) Create/Update SavedCard (since this payment method was used successfully)
+							const paymentMethod = await stripe.paymentMethods.retrieve(paymentMethodId);
+							if (paymentMethod.card) {
+								const existingCard = await tx.savedCard.findUnique({
+									where: { stripePaymentMethodId: paymentMethodId }
+								});
+								if (!existingCard) {
+									await tx.savedCard.create({
+										data: {
+											userId: userId,
+											stripePaymentMethodId: paymentMethodId,
+											brand: paymentMethod.card.brand,
+											last4: paymentMethod.card.last4,
+											expMonth: paymentMethod.card.exp_month,
+											expYear: paymentMethod.card.exp_year,
+											isDefault: false // Will be set later if needed
+										}
+									});
+									console.log(`            Created local SavedCard record ${paymentMethodId} within transaction.`);
+								}
+							} else {
+								console.warn(`            Webhook Warning: Payment Method ${paymentMethodId} is not a card, cannot save locally.`);
+							}
+							
+							// b) Create Subscription Record (Existing Logic)
+							// ... (keep existing subscription creation logic) ...
+							const subEndDateRaw = (stripeSubscription as any).current_period_end;
+							const subEndDate = typeof subEndDateRaw === 'number' ? new Date(subEndDateRaw * 1000) : undefined;
+							const firstSubItemContext = cartItems.find((item: any) => item.isSubscription);
+							
+							const newLocalSub = await tx.subscription.create({
+								data: {
+									userId: userId,
+									stripeSubscriptionId: stripeSubscription.id,
+									stripePriceId: firstSubItemContext?.priceId || 'unknown',
+									status: stripeSubscription.status,
+									interval: firstSubItemContext?.recurringInterval || 'unknown',
+									currentPeriodEnd: subEndDate,
+									cancelAtPeriodEnd: stripeSubscription.cancel_at_period_end,
+									collectionPaused: (stripeSubscription as any).pause_collection?.behavior === 'void',
+									checkoutAttemptId: checkoutAttemptId // <-- Save the ID
+								}
+							});
+							console.log(`            Created local Subscription record: ${newLocalSub.id}`);
+
+							// c) Create Order Record (Existing Logic)
+							// ... (keep existing order creation logic) ...
+							let orderTotalAmount = 0;
+							cartItems.forEach((item: any) => {
+								const price = parseFloat(item.price);
+								if (!isNaN(price)) {
+									orderTotalAmount += price * item.quantity;
+								}
+							});
+							const totalAmountDecimal = new Decimal(orderTotalAmount.toFixed(2));
+							
+							const newOrder = await tx.order.create({
+								data: {
+									userId: userId,
+									subscriptionId: newLocalSub.id,
+									totalAmount: totalAmountDecimal, 
+									status: 'PAID', // Assume PAID because SetupIntent succeeded
+									contactEmail: contactInfo.email,
+									contactPhone: contactInfo.phone || null,
+									shippingName: shippingAddress.fullName,
+									shippingAddress1: shippingAddress.address1,
+									shippingAddress2: shippingAddress.address2 || null,
+									shippingCity: shippingAddress.city,
+									shippingState: shippingAddress.state,
+									shippingPostalCode: shippingAddress.postalCode,
+									shippingCountry: shippingAddress.country,
+									checkoutAttemptId: checkoutAttemptId, // <-- Save the ID
+									items: {
+										create: cartItems.map((item: any) => ({
+											productId: item.productId,
+											productName: item.productName || 'Unknown',
+											quantity: item.quantity,
+											price: new Decimal(item.price || 0), 
+										})),
+									},
+								},
+								select: { id: true }
+							});
+							console.log(`            Created local Order record: ${newOrder.id} linked to Sub ${newLocalSub.id}`);
+						
+						}); // End Transaction
+						console.log(`        DB transaction completed.`);
+					
+						// --- 5. Delete Temporary Context Data --- 
+						console.log(`        Deleting temporary context ID: ${checkoutAttemptId}`);
+						await deleteCheckoutAttempt(checkoutAttemptId);
+						console.log(`        Temporary context deleted.`);
+					
+					} catch (txError) {
+						console.error(`    DB transaction failed:`, txError);
+						// If the transaction fails, the Stripe subscription still exists.
+						// Also, the temporary context data was NOT deleted.
+						// Need robust error handling / retry / notification logic here.
+					}
+					
+				} catch (error) {
+					console.error(`Webhook Error (SetupIntent Succeeded ${setupIntent.id}, checkoutAttemptId: ${checkoutAttemptId}): Error processing event:`, error);
+				}
+				// --- End Existing Subscription Flow Logic --- 
+				
+			} else {
+				// Scenario 3: Unknown source or missing metadata
+				console.warn(`Webhook (SetupIntent Succeeded ${setupIntent.id}): Received without 'source' or 'checkoutAttemptId' metadata. Cannot determine action.`);
+			}
+
 			break;
 
 		case 'payment_intent.succeeded':

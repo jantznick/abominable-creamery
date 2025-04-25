@@ -17,6 +17,7 @@ import { ProductProvider } from './src/context/ProductContext';
 import { getStripeProducts } from './src/server/utils/stripeProducts';
 import { Flavor } from './src/types/flavor';
 import subscriptionsRouter from './src/server/routes/subscriptions';
+import cardRouter from './src/server/routes/cards';
 
 import AppRoutes from './src/routes/index';
 import AppWrapper from './src/AppWrapper';
@@ -74,6 +75,7 @@ app.use('/api/orders', orderRouter);
 app.use('/api/addresses', addressRouter);
 app.use('/api/users', userRouter);
 app.use('/api/subscriptions', subscriptionsRouter);
+app.use('/api/cards', cardRouter);
 
 app.get('*', async (req: Request, res: Response) => {
 	if (!stripe) {

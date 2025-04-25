@@ -8,6 +8,7 @@ import { UserProfileView } from '../components/profile/UserProfileView';
 import { AdminOrdersView } from '../components/profile/AdminOrdersView';
 import AddressManager from '../components/profile/AddressManager';
 import UserProfileModal from '../components/profile/UserProfileModal';
+import CardManager from '../components/profile/CardManager';
 import { formatPhoneNumber } from '../utils/formatting';
 
 // NOTE: The interfaces ApiUser, OrderItemData, OrderData were moved to ../types/data.ts
@@ -130,14 +131,22 @@ const Profile: React.FC = () => {
                 />
               </>
             ) : (
-                <UserProfileView 
-                    user={user as ApiUser} 
-                    orders={fetchedOrders} 
-                    isLoadingOrders={isLoadingOrders} 
-                    errorLoadingOrders={errorLoadingOrders} 
-                    formatDate={formatDate} 
-                    formatCurrency={formatCurrency} 
-                />
+                <>
+                    <UserProfileView 
+                        user={user as ApiUser} 
+                        orders={fetchedOrders} 
+                        isLoadingOrders={isLoadingOrders} 
+                        errorLoadingOrders={errorLoadingOrders} 
+                        formatDate={formatDate} 
+                        formatCurrency={formatCurrency} 
+                    />
+                    <div className="mt-8 pt-6 border-t border-slate-200">
+                        <AddressManager />
+                    </div>
+                    <div className="mt-8 pt-6 border-t border-slate-200">
+                        <CardManager />
+                    </div>
+                </>
             )}
         </div>
     );

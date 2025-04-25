@@ -120,4 +120,16 @@ export interface ApiOrder {
     items: OrderItem[];
     createdAt: string;
     updatedAt: string;
+}
+
+// Represents the structure for a Saved Card from the API
+// Should align with the Prisma SavedCard select fields
+export interface ApiSavedCard {
+    id: number; // The database ID
+    stripePaymentMethodId: string;
+    brand: string;
+    last4: string;
+    expMonth: number;
+    expYear: number;
+    isDefault: boolean;
 } 

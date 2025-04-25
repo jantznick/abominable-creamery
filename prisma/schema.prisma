@@ -46,6 +46,7 @@ model User {
   orders        Order[]  // Relation to Orders
   addresses     Address[] // Relation to Addresses
   subscriptions Subscription[] // Add relation to Subscriptions
+  savedCards    SavedCard[] // Relation to Saved Cards
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -79,6 +80,7 @@ model Order {
   contactPhone       String?
 
   items              OrderItem[] // Relation to OrderItem model
+  notes              String?     // Optional field for customer notes
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -124,6 +126,27 @@ model Address {
   updatedAt     DateTime @updatedAt
 
   @@index([userId])
+}
+
+// --- Saved Credit Card Model ---
+model SavedCard {
+  id                   Int      @id @default(autoincrement())
+  userId               Int
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade) // Cascade delete if user is deleted
+
+  stripePaymentMethodId String   @unique // The pm_... ID from Stripe.
+  brand                String   // e.g., "visa", "mastercard".
+  last4                String   // Last four digits.
+  expMonth             Int      // Expiration month.
+  expYear              Int      // Expiration year.
+  isDefault            Boolean  @default(false) // Indicates the default payment method for the user.
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([userId])
+  // Optional: Add a unique constraint if only one default is allowed per user
+  // @@unique([userId, isDefault]) // This needs careful handling when setting a new default
 }
 
 // --- New Subscription Model ---

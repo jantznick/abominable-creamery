@@ -43,12 +43,20 @@ const OrderItemSchema = z.object({
 // Infer the type from Zod schema for item mapping
 type OrderItemInput = ZodInfer<typeof OrderItemSchema>;
 
+// --- UPDATED CreateOrderSchema to expect only checkoutAttemptId ---
 const CreateOrderSchema = z.object({
-    items: z.array(OrderItemSchema).min(1, { message: "Order must contain at least one item" }),
-    totalAmount: z.number().positive({ message: "Total amount must be positive" }), // Expect total in dollars
-    shippingAddress: AddressSchema,
-    contactInfo: ContactInfoSchema,
-    paymentIntentId: z.string().min(1, { message: "Payment Intent ID is required" }),
+	checkoutAttemptId: z.string().min(1, { message: "Checkout Attempt ID is required" }),
+});
+
+// --- Define Zod schema for the expected structure inside CheckoutAttempt.data ---
+const CheckoutAttemptDataSchema = z.object({
+	userId: z.number().int().nullable(),
+	cartItems: z.array(OrderItemSchema), // Reuse existing OrderItemSchema
+	contactInfo: ContactInfoSchema, // Reuse existing ContactInfoSchema
+	shippingAddress: AddressSchema, // Reuse existing AddressSchema
+	notes: z.string().optional(), // Include optional notes
+	// Add totalAmount if it's reliably stored in CheckoutAttempt, otherwise recalculate
+	// totalAmount: z.number().positive(), 
 });
 
 const router: Router = express.Router();
@@ -73,110 +81,145 @@ const isAdmin = (req: Request, res: Response, next: NextFunction) => {
 
 // --- Order Routes ---
 
-// POST /api/orders - Create a new order
+// POST /api/orders - Create a new order FROM a CheckoutAttempt ID
 router.post('/', async (req: Request, res: Response) => {
-    // 1. Validate request body
-    const validationResult = CreateOrderSchema.safeParse(req.body);
-    if (!validationResult.success) {
-        console.error("Order validation failed:", validationResult.error.errors);
-        // Use flatten() for potentially cleaner error reporting to frontend
-        return res.status(400).json({ message: "Invalid order data", errors: validationResult.error.flatten() });
-    }
+	// 1. Validate request body for checkoutAttemptId
+	const validationResult = CreateOrderSchema.safeParse(req.body);
+	if (!validationResult.success) {
+		console.error("Create Order validation failed (expecting checkoutAttemptId):", validationResult.error.errors);
+		return res.status(400).json({ message: "Invalid request data", errors: validationResult.error.flatten() });
+	}
 
-    const { items, totalAmount, shippingAddress, contactInfo, paymentIntentId } = validationResult.data;
-    const userId = req.session.user?.id;
+	const { checkoutAttemptId } = validationResult.data;
+	// We still check req.session.user.id consistency if available, but allow guests
+	const sessionUserId = req.session.user?.id;
 
-    try {
-        const newOrder = await prisma.$transaction(async (tx) => {
-            // Prepare Order data separately for clarity
-            const orderData: Prisma.OrderCreateInput = {
-                // Use connect syntax for relation if userId exists
-                user: userId ? { connect: { id: userId } } : undefined,
-                contactEmail: contactInfo.email,
-                contactPhone: contactInfo.phone,
-                status: 'PAID', // Try direct string assignment again, as schema defines 'PAID'
-                totalAmount: new Prisma.Decimal(totalAmount),
-                // stripePaymentIntentId: paymentIntentId, // <-- FIELD MISSING IN SCHEMA!
-                
-                // Shipping Address fields
-                shippingName: shippingAddress.fullName,
-                shippingAddress1: shippingAddress.address1,
-                shippingAddress2: shippingAddress.address2,
-                shippingCity: shippingAddress.city,
-                shippingState: shippingAddress.state,
-                shippingPostalCode: shippingAddress.postalCode,
-                shippingCountry: shippingAddress.country,
-                // Items will be created separately below
-                items: undefined // Explicitly undefined here, created via createMany later
-            };
+	try {
+		// 2. Fetch the CheckoutAttempt record
+		const attempt = await prisma.checkoutAttempt.findUnique({
+			where: { id: checkoutAttemptId },
+		});
 
-            const order = await tx.order.create({ data: orderData });
+		if (!attempt) {
+			console.error(`CheckoutAttempt record not found for ID: ${checkoutAttemptId}`);
+			return res.status(404).json({ message: 'Checkout session not found or expired.' });
+		}
 
-            // Create OrderItem records
-            const orderItemsData = items.map((item: OrderItemInput) => ({
-                orderId: order.id,
-                productId: item.productId, 
-                productName: item.productName, // Still using productName as per schema
-                quantity: item.quantity,
-                price: new Prisma.Decimal(item.price),
-            }));
+		// 3. Parse and Validate the data within the CheckoutAttempt record
+		let parsedData: any;
+		try {
+			parsedData = JSON.parse(attempt.data as string); // Assuming attempt.data is JSON string
+		} catch (parseError) {
+			console.error(`Failed to parse JSON data for CheckoutAttempt ${checkoutAttemptId}:`, parseError);
+			return res.status(500).json({ message: 'Internal error: Failed to process checkout data.' });
+		}
 
-            // Use createMany for OrderItems
-            await tx.orderItem.createMany({ data: orderItemsData });
+		const dataValidationResult = CheckoutAttemptDataSchema.safeParse(parsedData);
+		if (!dataValidationResult.success) {
+			console.error(`Validation failed for data within CheckoutAttempt ${checkoutAttemptId}:`, dataValidationResult.error.errors);
+			return res.status(400).json({ message: 'Invalid checkout session data.', errors: dataValidationResult.error.flatten() });
+		}
 
-            // Return the created order (without items, as they aren't included by default)
-            // If items are needed in response, a separate query/include would be necessary
-            return order; 
-        });
+		// Use the validated data from the attempt
+		const { userId, cartItems, contactInfo, shippingAddress, notes } = dataValidationResult.data;
 
-        // --- Update Stripe PaymentIntent Metadata (After successful DB transaction) ---
-        if (stripe) {
-            try {
-                await stripe.paymentIntents.update(paymentIntentId, {
-                    metadata: { 
-                        // Add or update the order_id. This merges with existing metadata by default.
-                        // If a key exists, it's updated; otherwise, it's added.
-                        order_id: newOrder.id 
-                    }
-                });
-                console.log(`Successfully updated Stripe PaymentIntent ${paymentIntentId} with order ID ${newOrder.id}`);
-            } catch (stripeError) {
-                // Log the error but don't fail the response to the client,
-                // as the order *was* created in the database.
-                console.error(`Failed to update Stripe PaymentIntent ${paymentIntentId} metadata:`, stripeError);
-                // Optional: Could queue this for retry or notify monitoring.
-            }
-        } else {
-             console.warn(`Stripe not initialized. Could not update PaymentIntent ${paymentIntentId} metadata.`);
-        }
-        // --- End Stripe Update ---
+		// --- Security/Consistency Check: User ID --- 
+		if (sessionUserId && userId && sessionUserId !== userId) {
+			console.warn(`User ID mismatch: Session user (${sessionUserId}) differs from CheckoutAttempt user (${userId}) for ID ${checkoutAttemptId}.`);
+			// Decide on handling: block, log, proceed? For now, log and proceed, using attempt's userId.
+		}
+		const finalUserId = userId; // Use the ID stored in the attempt
 
-        console.log(`Order ${newOrder.id} created successfully for ${userId ? `user ${userId}` : `guest ${contactInfo.email}`}`);
-        res.status(201).json({ 
-            message: 'Order created successfully', 
-            orderId: newOrder.id, 
-            status: newOrder.status 
-        });
+		// --- Calculate Total Amount --- 
+		// Recalculate total from validated items for accuracy, as it might not be stored/reliable in attempt.data
+		let totalAmount = new Prisma.Decimal(0);
+		cartItems.forEach(item => {
+			// item.price is validated as number by Zod
+			totalAmount = totalAmount.plus(new Prisma.Decimal(item.price).times(item.quantity));
+		});
+		if (totalAmount.lessThanOrEqualTo(0)) {
+			console.error(`Calculated total amount is not positive for CheckoutAttempt ${checkoutAttemptId}.`);
+			return res.status(400).json({ message: 'Invalid order total calculated.' });
+		}
 
-    } catch (error) {
-        console.error("Failed to create order:", error);
-        // 6. Handle potential errors
-        if (error instanceof Prisma.PrismaClientKnownRequestError) {
-            // Handle specific Prisma errors if needed
-            if (error.code === 'P2002') { // Unique constraint failed
-                 // Consider if paymentIntentId should be unique in schema
-                 return res.status(409).json({ message: 'Conflict: Order potentially already created for this payment.' });
-            }
-             // Example: Foreign key constraint failed (e.g., invalid userId or productId)
+		// 4. Create Order within a transaction
+		const newOrder = await prisma.$transaction(async (tx) => {
+			const orderData: Prisma.OrderCreateInput = {
+				user: finalUserId ? { connect: { id: finalUserId } } : undefined,
+				contactEmail: contactInfo.email,
+				contactPhone: contactInfo.phone,
+				status: 'PAID', // Assuming payment was successful if this endpoint is called
+				totalAmount: totalAmount,
+				checkoutAttemptId: checkoutAttemptId, // Link to the attempt ID
+				// stripePaymentIntentId: paymentIntentId, // Removed - Should be added by webhook based on checkoutAttemptId metadata
+				
+				// Shipping Address fields from validated data
+				shippingName: shippingAddress.fullName,
+				shippingAddress1: shippingAddress.address1,
+				shippingAddress2: shippingAddress.address2,
+				shippingCity: shippingAddress.city,
+				shippingState: shippingAddress.state,
+				shippingPostalCode: shippingAddress.postalCode,
+				shippingCountry: shippingAddress.country,
+				// Add notes from validated data
+				notes: notes,
+				items: undefined // Items created separately
+			};
+
+			const order = await tx.order.create({ data: orderData });
+
+			const orderItemsData = cartItems.map((item: OrderItemInput) => ({
+				orderId: order.id,
+				productId: item.productId,
+				productName: item.productName,
+				quantity: item.quantity,
+				price: new Prisma.Decimal(item.price),
+			}));
+
+			await tx.orderItem.createMany({ data: orderItemsData });
+
+			// --- Optional: Delete the CheckoutAttempt record after successful order creation ---
+			try {
+				await tx.checkoutAttempt.delete({ where: { id: checkoutAttemptId } });
+				console.log(`Successfully deleted CheckoutAttempt record ${checkoutAttemptId}`);
+			} catch (deleteError) {
+				// Log deletion error but don't fail the transaction
+				console.error(`Failed to delete CheckoutAttempt record ${checkoutAttemptId}:`, deleteError);
+			}
+			// ----------------------------------------------------------------------------------
+
+			return order;
+		});
+
+		// --- Removed Stripe PaymentIntent Metadata Update --- 
+		// This should be handled by the webhook using the checkoutAttemptId from event metadata
+
+		console.log(`Order ${newOrder.id} created successfully from CheckoutAttempt ${checkoutAttemptId}`);
+		res.status(201).json({ 
+			message: 'Order created successfully', 
+			orderId: newOrder.id, 
+			status: newOrder.status 
+		});
+
+	} catch (error) {
+		console.error(`Failed to create order from CheckoutAttempt ${checkoutAttemptId}:`, error);
+		if (error instanceof Prisma.PrismaClientKnownRequestError) {
+			// P2002: Unique constraint failed (e.g., trying to create order for same checkoutAttemptId twice)
+			if (error.code === 'P2002') {
+				// Check which field caused the error, likely checkoutAttemptId unique constraint
+				const target = (error.meta as any)?.target;
+				console.warn(`Unique constraint violation on creating order from attempt ${checkoutAttemptId}. Target: ${target}`);
+				return res.status(409).json({ message: 'Conflict: Order may have already been created for this checkout session.' });
+			}
+			// P2003: Foreign key constraint failed (e.g., invalid finalUserId if provided)
             if (error.code === 'P2003') {
-                // Check error.meta.field_name to see which constraint failed
                 const failedField = (error.meta as any)?.field_name || 'unknown field';
-                console.error(`Foreign key constraint failed on field: ${failedField}`);
+                console.error(`Foreign key constraint failed on field: ${failedField} for attempt ${checkoutAttemptId}`);
                  return res.status(400).json({ message: `Invalid reference for field: ${failedField}` });
             }
-        }
-        res.status(500).json({ message: 'Internal server error while creating order.' });
-    }
+		}
+		res.status(500).json({ message: 'Internal server error while creating order.' });
+	}
 });
 
 // GET /api/orders/my - Get orders for the currently logged-in user

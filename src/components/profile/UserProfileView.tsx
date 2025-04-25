@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 // Import shared types from the new types file
 import { OrderData, ApiUser, OrderItemData } from '../../types/data'; 
 import { OrderCard } from '../orders/OrderCard'; // Import the new component
-import AddressManager from './AddressManager'; // Import AddressManager
 import UserProfileModal from './UserProfileModal'; // Import profile modal
 import { formatPhoneNumber } from '../../utils/formatting'; // Import the new formatter
 import SubscriptionList from './SubscriptionList'; // Import SubscriptionList
@@ -79,12 +78,7 @@ export const UserProfileView: React.FC<UserProfileViewProps> = ({
             {/* --- Subscription Management Section --- */}
             {/* Render this section regardless of orders */}
             <SubscriptionList />
-            {/* ------------------------------------ */}
-
-            {/* Address Management Section */}
-            <div className="mt-8"> {/* Added margin-top consistent with other sections */}
-              <AddressManager />
-            </div>
+            {/* ------------------------------------ */}	
 
             {/* Profile Edit Modal */}
             {user && ( // Ensure user data is available before rendering modal

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import AddressModal from './AddressModal'; // Import the modal
-import { Address } from '../../types/data'; // Import shared Address type
+import ProfileItemModal from './ProfileItemModal'; // Import the refactored modal
+import AddressForm from './AddressForm'; // Assume AddressForm exists separately
+import { Address, AddressFormData } from '../../types/data'; // Import shared Address type and AddressFormData
 import ConfirmationModal from '../common/ConfirmationModal'; // Import ConfirmationModal
 
 interface AddressManagerProps {
@@ -14,7 +15,7 @@ const AddressManager: React.FC<AddressManagerProps> = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // --- Modal State ---
-  const [isAddressModalOpen, setIsAddressModalOpen] = useState(false);
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false); // Rename state for clarity
   const [editingAddress, setEditingAddress] = useState<Address | null>(null);
 
   // --- Confirmation Modal State ---
@@ -153,22 +154,59 @@ const AddressManager: React.FC<AddressManagerProps> = () => {
     }
   };
 
-  // --- Modal Control Functions ---
+  // --- Modal Control Functions (Updated) ---
   const openAddModal = () => {
-    setEditingAddress(null); // Ensure we are in "add" mode
-    setIsAddressModalOpen(true);
+    setEditingAddress(null);
+    setError(null); // Clear errors when opening modal
+    setIsItemModalOpen(true); 
   };
 
   const openEditModal = (address: Address) => {
-    setEditingAddress(address); // Set the address to edit
-    setIsAddressModalOpen(true);
+    setEditingAddress(address);
+    setError(null); // Clear errors when opening modal
+    setIsItemModalOpen(true); 
   };
 
-  const closeAddressModal = (refreshNeeded?: boolean) => {
-    setIsAddressModalOpen(false);
-    setEditingAddress(null); // Clear editing state
-    if (refreshNeeded) {
-      fetchAddresses(); // Refetch addresses if an add/edit occurred
+  const closeItemModal = () => {
+    setIsItemModalOpen(false);
+    setEditingAddress(null);
+    setError(null); // Clear errors when closing
+  };
+
+  // Function to handle form submission from AddressForm
+  const handleAddressSubmit = async (formData: AddressFormData) => {
+    setIsSubmitting(true);
+    setError(null);
+    const method = editingAddress ? 'PUT' : 'POST';
+    const url = editingAddress ? `/api/addresses/${editingAddress.id}` : '/api/addresses';
+
+    try {
+        const response = await fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formData),
+        });
+
+        if (!response.ok) {
+             let errorMsg = `Failed to ${editingAddress ? 'update' : 'add'} address.`;
+             if (response.status === 401) {
+                 errorMsg = 'Authentication required.';
+             } else {
+                 try { const errorData = await response.json(); errorMsg = errorData.message || errorMsg; } catch {}
+             }
+            throw new Error(errorMsg);
+        }
+
+        closeItemModal(); // Close modal first
+        fetchAddresses(); // Then refetch addresses
+
+    } catch (err: any) {
+        console.error("Address Submit Error:", err);
+        setError(err.message || 'An unknown error occurred');
+        // Keep modal open to show error within it? Or display above? 
+        // For now, error state is set and can be displayed by parent or form.
+    } finally {
+        setIsSubmitting(false);
     }
   };
 
@@ -181,7 +219,7 @@ const AddressManager: React.FC<AddressManagerProps> = () => {
               Loading addresses...
           </p>
       )}
-      {error && <p className="text-red-500 bg-red-50 p-3 rounded mb-4"><span className="font-bold">Error:</span> {error}</p>}
+      {error && !isItemModalOpen && <p className="text-red-500 bg-red-50 p-3 rounded mb-4"><span className="font-bold">Error:</span> {error}</p>}
       {!isLoading && !error && (
         <div className="space-y-4">
           {addresses.length === 0 ? (
@@ -240,20 +278,31 @@ const AddressManager: React.FC<AddressManagerProps> = () => {
         </div>
       )}
 
-      {/* Render the Address Modal */}
-      <AddressModal 
-        isOpen={isAddressModalOpen} 
-        onClose={closeAddressModal} 
-        addressToEdit={editingAddress} 
-      />
+      {/* Render the generic ProfileItemModal */}
+      <ProfileItemModal 
+        isOpen={isItemModalOpen} 
+        onClose={closeItemModal} 
+        title={editingAddress ? "Edit Address" : "Add New Address"} 
+      >
+         {/* Pass AddressForm as children, providing initialData and onSubmit handler */}
+         <AddressForm 
+            initialData={editingAddress} 
+            onSubmit={handleAddressSubmit} 
+            isLoading={isSubmitting} 
+            // Pass error state down if AddressForm can display it
+            // error={error} 
+         />
+         {/* Display submission errors within the modal if needed */}
+         {error && isItemModalOpen ? <p className="text-red-600 mt-3 text-sm">Error: {error}</p> : null} 
+      </ProfileItemModal>
 
       {/* Render the Confirmation Modal */}
       <ConfirmationModal
         isOpen={isConfirmModalOpen}
         onClose={closeConfirmModal}
         onConfirm={confirmDelete}
-        title="Delete Address"
-        message="Are you sure you want to delete this address? This action cannot be undone."
+        title="Delete Address?"
+        message={`Are you sure you want to delete this address? This action cannot be undone.`}
         confirmButtonText="Delete"
         isLoading={isSubmitting}
       />

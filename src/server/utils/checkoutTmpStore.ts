@@ -17,6 +17,9 @@ interface CheckoutContext {
         postalCode: string;
         country: string;
     };
+    notes?: string;
+    selectedCardId?: string; // Added: Stripe PaymentMethod ID if user selected a saved card
+    saveNewCardForFuture?: boolean; // Added: Flag if user wants to save the new card
 }
 
 /**

@@ -144,6 +144,160 @@ const StripeCheckoutForm = ({ clientSecret, checkoutAttemptId }: { clientSecret:
 	)
 }
 
+// --- New Component for Payment Section Content ---
+interface PaymentSectionContentProps {
+	clientSecret: string;
+	checkoutAttemptId: string;
+	auth: ReturnType<typeof useAuth>; // Get type from hook
+	savedCards: ApiSavedCard[];
+	isLoadingCards: boolean;
+	errorLoadingCards: string | null;
+	selectedCardId: string;
+	handleSelectCard: (event: React.ChangeEvent<HTMLSelectElement>) => void;
+	containsSubscription: boolean;
+	saveNewCardForFuture: boolean;
+	setSaveNewCardForFuture: (value: boolean) => void;
+	total: number; // Pass total for button text
+}
+
+const PaymentSectionContent: React.FC<PaymentSectionContentProps> = ({
+	clientSecret,
+	checkoutAttemptId,
+	auth,
+	savedCards,
+	isLoadingCards,
+	errorLoadingCards,
+	selectedCardId,
+	handleSelectCard,
+	containsSubscription,
+	saveNewCardForFuture,
+	setSaveNewCardForFuture,
+	total
+}) => {
+	const stripe = useStripe();
+	const navigate = useNavigate(); // Need navigate for manual redirect
+
+	// State needed here
+	const [isPayingWithSavedCard, setIsPayingWithSavedCard] = useState(false);
+	const [savedCardPaymentError, setSavedCardPaymentError] = useState<string | null>(null);
+
+	// Handler needed here
+	const handlePayWithSavedCard = async () => {
+		if (!stripe || !clientSecret || !selectedCardId || !checkoutAttemptId) {
+			console.error("Missing Stripe, clientSecret, selectedCardId, or checkoutAttemptId for saved card payment.");
+			setSavedCardPaymentError("Payment system not ready or card not selected.");
+			return;
+		}
+
+		// Save checkoutAttemptId before confirming
+		try {
+			sessionStorage.setItem('checkoutDataForConfirmation', checkoutAttemptId);
+			console.log("Saved checkoutAttemptId to sessionStorage.");
+		} catch (error) {
+			console.error("Error saving checkoutAttemptId to sessionStorage:", error);
+			setSavedCardPaymentError("Error preparing session data. Please try again.");
+			return;
+		}
+		
+		setIsPayingWithSavedCard(true);
+		setSavedCardPaymentError(null);
+
+		console.log(`Confirming PaymentIntent ${clientSecret} with saved card ${selectedCardId}`);
+		const { error } = await stripe.confirmCardPayment(clientSecret, {
+			payment_method: selectedCardId,
+		});
+
+		if (error) {
+			console.error("Error confirming saved card payment:", error);
+			setSavedCardPaymentError(error.message || "Failed to process payment with saved card.");
+		} else {
+			console.log("Saved card payment successful (client-side), redirecting manually...");
+			navigate(`/order-confirmation?payment_intent=${clientSecret.split('_secret')[0]}&payment_intent_client_secret=${clientSecret}&redirect_status=succeeded`);
+		}
+
+		setIsPayingWithSavedCard(false);
+	};
+
+	// JSX moved here
+	return (
+		<>
+			{/* --- Saved Card Selection --- */} 
+			{auth.user && (
+				<div className="mb-4">
+					<label htmlFor="saved-card-select" className="block text-sm font-medium text-slate-700 mb-1">
+						Payment Method
+					</label>
+					{isLoadingCards && <p className="text-sm text-slate-500">Loading saved cards...</p>}
+					{errorLoadingCards && <p className="text-sm text-red-600">Error loading cards: {errorLoadingCards}</p>}
+					{!isLoadingCards && (
+						<select 
+							id="saved-card-select"
+							value={selectedCardId}
+							onChange={handleSelectCard}
+							className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2"
+							disabled={savedCards.length === 0}
+						>
+							<option value="">Enter New Card Details</option>
+							{savedCards.map(card => (
+								<option key={card.stripePaymentMethodId} value={card.stripePaymentMethodId}>
+									{card.brand.toUpperCase()} ending in {card.last4} {card.isDefault ? '(Default)' : ''}
+								</option>
+							))}
+						</select>
+					)}
+				</div>
+			)}
+
+			{/* --- Subscription Notification --- */} 
+			{containsSubscription && auth.user && selectedCardId === '' && (
+				<div className="p-3 mb-4 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
+					<span className="font-semibold">Note:</span> Your payment method will be saved for managing your subscription.
+				</div>
+			)}
+
+			{/* --- Stripe Elements / Saved Card Placeholder --- */} 
+			{(!auth.user || selectedCardId === '') ? (
+				// Show Elements if guest or new card selected
+				<StripeCheckoutForm clientSecret={clientSecret} checkoutAttemptId={checkoutAttemptId} />
+			) : (
+				// Show placeholder if logged in and saved card selected
+				<div className="p-4 bg-slate-100 border border-slate-200 rounded-md text-sm text-slate-700 space-y-3">
+					<p>Using saved card: <span className="font-medium">{savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.brand.toUpperCase()} ending in {savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.last4}</span>.</p>
+					<button 
+						onClick={handlePayWithSavedCard} 
+						disabled={isPayingWithSavedCard || !stripe || !clientSecret || !selectedCardId} 
+						className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+					>
+						{isPayingWithSavedCard ? (
+							<div className="spinner border-t-2 border-white border-solid rounded-full w-5 h-5 animate-spin mx-auto"></div>
+						) : (
+							`Pay $${total.toFixed(2)} with Saved Card`
+						)}
+					</button>
+					{savedCardPaymentError && <p className="text-red-600 text-sm mt-2 text-center">{savedCardPaymentError}</p>}
+				</div>
+			)}
+
+			{/* --- Save Card Checkbox --- */} 
+			{auth.user && selectedCardId === '' && !containsSubscription && (
+				<div className="flex items-center mt-4 pt-4 border-t border-slate-200">
+					<input 
+						id="saveNewCardForFuture" 
+						name="saveNewCardForFuture" 
+						type="checkbox" 
+						checked={saveNewCardForFuture} 
+						onChange={(e) => setSaveNewCardForFuture(e.target.checked)} 
+						className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+					/>
+					<label htmlFor="saveNewCardForFuture" className="ml-2 block text-sm text-gray-900">
+						Save this card for future purchases
+					</label>
+				</div>
+			)}
+		</>
+	);
+};
+
 // --- Main Checkout Page Component ---
 type CheckoutSection = 'auth_choice' | 'contact' | 'shipping' | 'payment';
 
@@ -292,7 +446,9 @@ export const Checkout = () => {
 				})),
 				contactInfo: contactInfo,
 				shippingAddress: shippingAddress,
-				notes: notes // Include notes in the payload
+				notes: notes, // Include notes in the payload
+				selectedCardId: selectedCardId || undefined, // <-- Pass selected card ID if available
+				saveNewCardForFuture: saveNewCardForFuture || undefined // <-- Pass save card flag if available
 			};
 			// ---------------------------------------------
 			console.log("Checkout: Sending payload to /api/stripe/initiate-checkout:", JSON.stringify(payload, null, 2));
@@ -332,7 +488,7 @@ export const Checkout = () => {
 		// --- Dependencies --- 
 		// Add checkoutAttemptId to dependency array and include all form fields used in payload
 		// Add notes to dependencies
-	}, [activeSection, isShippingComplete, items, clientSecret, checkoutAttemptId, isLoadingSecret, email, phone, fullName, address1, address2, city, state, postalCode, country, notes]);
+	}, [activeSection, isShippingComplete, items, clientSecret, checkoutAttemptId, isLoadingSecret, email, phone, fullName, address1, address2, city, state, postalCode, country, notes, selectedCardId, saveNewCardForFuture]);
 
 	// --- Effect to fetch Saved Addresses ---
 	useEffect(() => {
@@ -710,77 +866,25 @@ export const Checkout = () => {
 										<p className="text-center text-red-600">Failed to initialize payment session. Please refresh or contact support.</p>
 									)}
 
-									{/* Render content only when client secret is ready */}
+									{/* Render Elements provider only when client secret is ready */} 
 									{clientSecret && checkoutAttemptId && stripePromise && options && (
-										<>
-											{/* --- Saved Card Selection --- */} 
-											{auth.user && (
-												<div className="mb-4">
-													<label htmlFor="saved-card-select" className="block text-sm font-medium text-slate-700 mb-1">
-														Payment Method
-													</label>
-													{isLoadingCards && <p className="text-sm text-slate-500">Loading saved cards...</p>}
-													{errorLoadingCards && <p className="text-sm text-red-600">Error loading cards: {errorLoadingCards}</p>}
-													{!isLoadingCards && (
-														<select 
-															id="saved-card-select"
-															value={selectedCardId}
-															onChange={handleSelectCard}
-															className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2"
-															disabled={savedCards.length === 0}
-														>
-															<option value="">Enter New Card Details</option>
-															{savedCards.map(card => (
-																<option key={card.stripePaymentMethodId} value={card.stripePaymentMethodId}>
-																	{card.brand.toUpperCase()} ending in {card.last4} {card.isDefault ? '(Default)' : ''}
-																</option>
-															))}
-														</select>
-													)}
-												</div>
-											)}
-
-											{/* --- Subscription Notification --- */} 
-											{containsSubscription && auth.user && selectedCardId === '' && (
-												<div className="p-3 mb-4 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
-													<span className="font-semibold">Note:</span> Your payment method will be saved for managing your subscription.
-												</div>
-											)}
-
-											{/* --- Stripe Elements / Saved Card Placeholder --- */} 
-											{(!auth.user || selectedCardId === '') ? (
-												// Show Elements if guest or new card selected
-												<Elements options={options} stripe={stripePromise}>
-													<StripeCheckoutForm clientSecret={clientSecret} checkoutAttemptId={checkoutAttemptId} />
-												</Elements>
-											) : (
-												// Show placeholder if logged in and saved card selected
-												<div className="p-4 bg-slate-100 border border-slate-200 rounded-md text-sm text-slate-700">
-													<p>Using saved card: <span className="font-medium">{savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.brand.toUpperCase()} ending in {savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.last4}</span>.</p>
-													{/* TODO: Add button to confirm payment with saved card */} 
-													<button disabled className="mt-3 w-full bg-indigo-400 text-white font-bold py-3 px-6 rounded-lg text-lg disabled:opacity-70 cursor-not-allowed">
-														Pay with Saved Card (Coming Soon)
-													</button>
-												</div>
-											)}
-
-											{/* --- Save Card Checkbox --- */}
-											{auth.user && selectedCardId === '' && !containsSubscription && (
-												<div className="flex items-center mt-4 pt-4 border-t border-slate-200">
-													<input 
-														id="saveNewCardForFuture" 
-														name="saveNewCardForFuture" 
-														type="checkbox" 
-														checked={saveNewCardForFuture} 
-														onChange={(e) => setSaveNewCardForFuture(e.target.checked)} 
-														className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
-													/>
-													<label htmlFor="saveNewCardForFuture" className="ml-2 block text-sm text-gray-900">
-														Save this card for future purchases
-													</label>
-												</div>
-											)}
-										</>
+										<Elements options={options} stripe={stripePromise}>
+											{/* Render the new content component */} 
+											<PaymentSectionContent
+												clientSecret={clientSecret}
+												checkoutAttemptId={checkoutAttemptId}
+												auth={auth}
+												savedCards={savedCards}
+												isLoadingCards={isLoadingCards}
+												errorLoadingCards={errorLoadingCards}
+												selectedCardId={selectedCardId}
+												handleSelectCard={handleSelectCard}
+												containsSubscription={containsSubscription}
+												saveNewCardForFuture={saveNewCardForFuture}
+												setSaveNewCardForFuture={setSaveNewCardForFuture}
+												total={total}
+											/>
+										</Elements> 
 									)}
 								</div> // End conditional content div
 							) : null} {/* Don't show payment form if prerequisites not met */}

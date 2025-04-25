@@ -33,6 +33,8 @@ interface InitiateCheckoutRequest {
 		country: string;
 	};
 	notes?: string; // Add optional notes field
+	selectedCardId?: string; // Optional: PM ID if paying with saved card
+	saveNewCardForFuture?: boolean; // Optional: Flag to save new card
 }
 
 // Define a type for the Order fetched with selected items
@@ -359,8 +361,8 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 		return res.status(500).send({ error: 'Stripe is not configured.' });
 	}
 
-	// Destructure notes from the request body
-	const { items, contactInfo, shippingAddress, notes } = req.body as InitiateCheckoutRequest;
+	// Destructure notes, selectedCardId, saveNewCardForFuture from the request body
+	const { items, contactInfo, shippingAddress, notes, selectedCardId, saveNewCardForFuture } = req.body as InitiateCheckoutRequest;
 	const sessionUser = req.session.user as SessionUser | undefined;
 
 	// --- Basic Validations (keep existing) ---
@@ -371,10 +373,17 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 		!shippingAddress.city || !shippingAddress.state || !shippingAddress.postalCode || !shippingAddress.country) {
 		return res.status(400).send({ error: 'Missing required contact or shipping fields.' });
 	}
+	if (selectedCardId && saveNewCardForFuture) {
+		return res.status(400).send({ error: 'Cannot select a saved card AND save a new card simultaneously.' });
+	}
+	if ((selectedCardId || saveNewCardForFuture) && !sessionUser) {
+		return res.status(401).send({ error: 'Login is required to use saved cards or save a new card.' });
+	}
 
 	let totalAmountCent = 0; // Use cents for Payment Intent amount
 	let containsSubscription = false;
-	const detailedCartItems: any[] = []; // For metadata context (still needed to build context object)
+	const detailedCartItems: any[] = []; // For metadata context
+	let stripeCustomerId: string | null = sessionUser?.stripeCustomerId || null;
 
 	try {
 		// --- Step 1: Validate items, calculate total, check for subscriptions ---
@@ -420,37 +429,16 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 			});
 		}
 
-		// --- Step 2: Prepare Context Object (No longer stringified for metadata) ---
-		const checkoutContext = {
-			userId: sessionUser?.id || null,
-			cartItems: detailedCartItems,
-			contactInfo: contactInfo,
-			shippingAddress: shippingAddress,
-			notes: notes // Include notes in the context object
-		};
-		// --- Removed contextString = JSON.stringify(checkoutContext); ---
-
-		// --- Step 2.5: Save context to temporary store and get ID ---
-		console.log("Saving checkout context to temporary store...");
-		const checkoutAttemptId = await saveCheckoutAttempt(checkoutContext);
-		console.log(`Checkout context saved with ID: ${checkoutAttemptId}`);
-
-		// --- Step 3: Create SetupIntent (for subs) or PaymentIntent (one-time) ---
-		let clientSecret: string | null = null;
-
-		if (containsSubscription) {
-			// --- Subscription Flow -> Create SetupIntent ---
-			if (!sessionUser || !sessionUser.id) { // Should be caught earlier, but double-check
-				return res.status(401).send({ error: 'Login required for subscriptions.' });
-			}
-
-			// Find or Create Stripe Customer (keep existing logic)
-			let stripeCustomerId = sessionUser.stripeCustomerId;
+		// --- Step 1.5: Ensure Stripe Customer Exists for logged-in users (moved earlier) ---
+		if (sessionUser) {
 			if (!stripeCustomerId) {
+				console.log(`No Stripe Customer ID found for user ${sessionUser.id}. Checking Stripe...`);
 				const existingCustomers = await stripe.customers.list({ email: sessionUser.email, limit: 1 });
 				if (existingCustomers.data.length > 0) {
 					stripeCustomerId = existingCustomers.data[0].id;
+					console.log(`Found existing Stripe Customer: ${stripeCustomerId}`);
 				} else {
+					console.log(`No existing Stripe customer found for ${sessionUser.email}. Creating one...`);
 					const newCustomer = await stripe.customers.create({
 						email: sessionUser.email,
 						name: sessionUser.name || undefined,
@@ -466,21 +454,61 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 						metadata: { internal_user_id: String(sessionUser.id) }
 					});
 					stripeCustomerId = newCustomer.id;
+					console.log(`Created new Stripe Customer: ${stripeCustomerId}`);
 				}
-				// Update local user
+				// Update local user regardless of whether customer was found or created
 				await prisma.user.update({
 					where: { id: sessionUser.id }, data: { stripeCustomerId: stripeCustomerId }
 				});
 				sessionUser.stripeCustomerId = stripeCustomerId; // Update session
+				console.log(`Updated user ${sessionUser.id} with Stripe Customer ID: ${stripeCustomerId}`);
 			}
+			// Validation: If selectedCardId is provided, ensure it belongs to the customer
+			if (selectedCardId && stripeCustomerId) {
+				try {
+					const paymentMethod = await stripe.paymentMethods.retrieve(selectedCardId);
+					if (paymentMethod.customer !== stripeCustomerId) {
+						console.warn(`Security Warning: User ${sessionUser.id} attempted to use PaymentMethod ${selectedCardId} belonging to customer ${paymentMethod.customer}, but their Stripe Customer ID is ${stripeCustomerId}.`);
+						return res.status(403).send({ error: 'Selected card does not belong to the current user.' });
+					}
+				} catch (pmError: any) {
+					console.warn(`Error retrieving PaymentMethod ${selectedCardId} for validation: ${pmError.message}`);
+					return res.status(400).send({ error: 'Invalid saved card selected.' });
+				}
+			}
+		} // End if (sessionUser)
 
-			// Create Setup Intent with only checkoutAttemptId in metadata
+		// --- Step 2: Prepare Context Object (including new flags) ---
+		const checkoutContext = {
+			userId: sessionUser?.id || null,
+			cartItems: detailedCartItems,
+			contactInfo: contactInfo,
+			shippingAddress: shippingAddress,
+			notes: notes,
+			selectedCardId: selectedCardId, // Add selectedCardId to context
+			saveNewCardForFuture: saveNewCardForFuture // Add saveNewCardForFuture to context
+		};
+
+		// --- Step 2.5: Save context to temporary store and get ID ---
+		console.log("Saving checkout context to temporary store...");
+		const checkoutAttemptId = await saveCheckoutAttempt(checkoutContext);
+		console.log(`Checkout context saved with ID: ${checkoutAttemptId}`);
+
+		// --- Step 3: Create SetupIntent (for subs) or PaymentIntent (one-time) ---
+		let clientSecret: string | null = null;
+
+		if (containsSubscription) {
+			// --- Subscription Flow -> Create SetupIntent ---
+			if (!sessionUser || !stripeCustomerId) { // Should be caught earlier, but double-check
+				return res.status(401).send({ error: 'Login required for subscriptions.' });
+			}
+			// Customer handling now done earlier
 			console.log(`Creating SetupIntent for customer: ${stripeCustomerId}`);
 			const setupIntent = await stripe.setupIntents.create({
 				customer: stripeCustomerId,
 				usage: 'on_session',
 				automatic_payment_methods: { enabled: true },
-				metadata: { checkoutAttemptId: checkoutAttemptId }, // <-- Use new ID
+				metadata: { checkoutAttemptId: checkoutAttemptId },
 			});
 			console.log(`SetupIntent ${setupIntent.id} created.`);
 			clientSecret = setupIntent.client_secret;
@@ -490,16 +518,34 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 			console.log("Creating PaymentIntent for one-time purchase.");
 			if (totalAmountCent <= 0) {
 				return res.status(400).send({ error: 'Total amount must be positive for one-time payment.' });
-		}
+			}
 
-		// Create Payment Intent with only checkoutAttemptId in metadata
-		const paymentIntent = await stripe.paymentIntents.create({
+			const paymentIntentParams: Stripe.PaymentIntentCreateParams = {
 				amount: totalAmountCent,
-			currency: 'usd', 
+				currency: 'usd',
 				automatic_payment_methods: { enabled: true },
-				metadata: { checkoutAttemptId: checkoutAttemptId }, // <-- Use new ID
-				// customer: sessionUser?.stripeCustomerId || undefined, // Optional customer link
-			});
+				metadata: { checkoutAttemptId: checkoutAttemptId },
+			};
+
+			// Add customer if logged in (enables showing saved cards in Payment Element)
+			if (sessionUser && stripeCustomerId) {
+				paymentIntentParams.customer = stripeCustomerId;
+				console.log(`Associating PaymentIntent with customer: ${stripeCustomerId}`);
+
+				// Add setup_future_usage if requested (and not using a saved card)
+				if (saveNewCardForFuture && !selectedCardId) {
+					paymentIntentParams.setup_future_usage = 'on_session';
+					console.log(`Setting setup_future_usage = 'on_session' for PaymentIntent.`);
+				}
+			}
+
+			// If a specific saved card is selected, pass it (optional but can help)
+			// Note: PaymentElement usually handles selection, but this confirms intent.
+			// if (selectedCardId && stripeCustomerId) {
+			// 	paymentIntentParams.payment_method = selectedCardId;
+			// }
+
+			const paymentIntent = await stripe.paymentIntents.create(paymentIntentParams);
 			console.log(`PaymentIntent ${paymentIntent.id} created.`);
 			clientSecret = paymentIntent.client_secret;
 		}
@@ -508,15 +554,14 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 		if (!clientSecret) {
 			throw new Error("Failed to initialize payment (client secret missing).");
 		}
-		// Return both values to the frontend
 		res.send({ clientSecret: clientSecret, checkoutAttemptId: checkoutAttemptId });
 
 	} catch (error: any) {
 		console.error("Error processing /initiate-checkout:", error);
 		let userMessage = 'Internal server error processing payment.';
-		if (error.message === 'Failed to save checkout attempt data.') { // Catch error from saveCheckoutAttempt
+		if (error.message === 'Failed to save checkout attempt data.') { 
 			userMessage = error.message;
-		} else if (error.type === 'StripeCardError') { userMessage = error.message; }
+		} else if (error.type === 'StripeCardError') { userMessage = error.message; } 
 		else if (error.type === 'StripeInvalidRequestError') { userMessage = `Invalid data provided: ${error.message}`; }
 		res.status(500).send({ error: userMessage });
 	}

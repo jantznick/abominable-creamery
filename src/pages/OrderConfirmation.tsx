@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useCart } from '../context/CartContext';
 // Removed Stripe imports as status check is now backend-driven
@@ -61,6 +61,9 @@ export const OrderConfirmation = () => {
     const [fetchedOrderDetails, setFetchedOrderDetails] = useState<OrderData | null>(null);
     // State to track the type of confirmation for UI elements
     const [confirmationType, setConfirmationType] = useState<'subscription' | 'order' | null>(null);
+
+    // Ref to track cart clearing
+    const cartClearedRef = useRef(false);
 
     // Get Payment Intent ID from URL
     const paymentIntentId = searchParams.get('payment_intent');
@@ -234,11 +237,13 @@ export const OrderConfirmation = () => {
 
     // --- Effect 3: Clear Cart on Success --- 
     useEffect(() => {
-        if (isSuccess === true) {
+        // Only clear cart ONCE when success is first detected
+        if (isSuccess === true && !cartClearedRef.current) {
             console.log("Order Confirmation: Clearing cart due to success state.");
             clearCart();
+            cartClearedRef.current = true; // Mark as cleared
         }
-    }, [isSuccess, clearCart]); 
+    }, [isSuccess]); // <-- Only depend on isSuccess
 
     // --- REMOVED Effect 4: Save Address --- 
     // This must now be handled server-side by the webhook after retrieving context

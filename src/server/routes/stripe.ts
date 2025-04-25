@@ -429,6 +429,32 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 			});
 		}
 
+		// --- ADD SHIPPING & TAX TO TOTAL (BEFORE CUSTOMER HANDLING) ---
+		const itemsSubtotalCent = totalAmountCent; // Keep subtotal for potential tax calculation
+		let finalAmountCent = itemsSubtotalCent;
+		// Fetch Shipping Rate Price from Stripe
+		let shippingCostCent = 0;
+		const shippingPriceId = process.env.STRIPE_SHIPPING_RATE_PRICE_ID;
+
+		if (itemsSubtotalCent > 0 && shippingPriceId) {
+			try {
+				const shippingStripePrice = await stripe.prices.retrieve(shippingPriceId);
+				if (shippingStripePrice && shippingStripePrice.active && shippingStripePrice.unit_amount) {
+					shippingCostCent = shippingStripePrice.unit_amount; // Amount in cents
+					finalAmountCent += shippingCostCent;
+					console.log(`Fetched and added shipping ($${(shippingCostCent / 100).toFixed(2)}) from Price ID ${shippingPriceId}. Final amount: $${(finalAmountCent / 100).toFixed(2)}`);
+				} else {
+					console.warn(`Stripe Price ID ${shippingPriceId} for shipping is invalid, inactive, or has no amount. Shipping not added.`);
+				}
+			} catch (priceError: any) {
+				console.error(`Error fetching Stripe Price ${shippingPriceId} for shipping: ${priceError.message}. Shipping not added.`);
+				// Decide if this should be a fatal error preventing checkout
+				// return res.status(500).send({ error: 'Could not retrieve shipping cost.' });
+			}
+		} else if (itemsSubtotalCent > 0) {
+            console.warn("STRIPE_SHIPPING_RATE_PRICE_ID not set in environment variables. Shipping not added.");
+        }
+
 		// --- Step 1.5: Ensure Stripe Customer Exists for logged-in users (moved earlier) ---
 		if (sessionUser) {
 			if (!stripeCustomerId) {
@@ -516,12 +542,13 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 		} else {
 			// --- One-Time Payment Flow -> Create PaymentIntent ---
 			console.log("Creating PaymentIntent for one-time purchase.");
-			if (totalAmountCent <= 0) {
-				return res.status(400).send({ error: 'Total amount must be positive for one-time payment.' });
+			// Use the FINAL calculated amount including shipping/tax
+			if (finalAmountCent <= 0) {
+				return res.status(400).send({ error: 'Total amount including items must be positive for one-time payment.' });
 			}
 
 			const paymentIntentParams: Stripe.PaymentIntentCreateParams = {
-				amount: totalAmountCent,
+				amount: finalAmountCent, // <-- Use the final amount
 				currency: 'usd',
 				automatic_payment_methods: { enabled: true },
 				metadata: { checkoutAttemptId: checkoutAttemptId },
@@ -565,6 +592,44 @@ router.post('/initiate-checkout', express.json(), async (req: Request, res: Resp
 		else if (error.type === 'StripeInvalidRequestError') { userMessage = `Invalid data provided: ${error.message}`; }
 		res.status(500).send({ error: userMessage });
 	}
+});
+
+// GET /api/stripe/shipping-rate
+// Retrieves the current flat shipping rate amount from the Stripe Price object
+router.get('/shipping-rate', async (req: Request, res: Response) => {
+    if (!stripe) {
+        return res.status(503).json({ error: 'Stripe service is not available.' });
+    }
+
+    const shippingPriceId = process.env.STRIPE_SHIPPING_RATE_PRICE_ID;
+
+    if (!shippingPriceId) {
+        console.error("API Error: STRIPE_SHIPPING_RATE_PRICE_ID is not set in environment variables.");
+        return res.status(503).json({ error: 'Shipping configuration is not available.' });
+    }
+
+    try {
+        const shippingPrice = await stripe.prices.retrieve(shippingPriceId);
+
+        if (!shippingPrice || !shippingPrice.active || typeof shippingPrice.unit_amount !== 'number') {
+            console.error(`API Error: Stripe Price ${shippingPriceId} for shipping is invalid, inactive, or has no amount.`);
+            return res.status(500).json({ error: 'Could not retrieve valid shipping cost details.' });
+        }
+
+        // Return amount in dollars for consistency with frontend usage
+        const amountInDollars = shippingPrice.unit_amount / 100;
+        res.status(200).json({ 
+            id: shippingPrice.id, 
+            amount: amountInDollars 
+        });
+
+    } catch (error: any) {
+        console.error(`API Error fetching Stripe Price ${shippingPriceId}:`, error.message);
+        if (error.type === 'StripeInvalidRequestError') {
+             return res.status(404).json({ error: 'Configured shipping price ID not found.' });
+        }
+        res.status(500).json({ error: 'Failed to retrieve shipping rate.' });
+    }
 });
 
 // --- POST /api/stripe/webhook --- 
@@ -712,10 +777,23 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 					}
 
 					// --- 2. Prepare for Stripe Subscription Creation (using retrieved context) --- 
-					// (Keep existing logic for subscription/one-time items)
+					// Retrieve the recurring shipping price ID from env
+					const shippingPriceId = process.env.STRIPE_SHIPPING_RATE_PRICE_ID;
+					if (!shippingPriceId) {
+						console.error(`    Webhook Error (SetupIntent Succeeded ${setupIntent.id}): STRIPE_SHIPPING_RATE_PRICE_ID environment variable is not set. Cannot add recurring shipping.`);
+						// Decide if this is fatal. If shipping MUST be charged, break.
+						// break;
+					}
+
 					const subscriptionItems = cartItems
 						.filter((item: any) => item.isSubscription)
 						.map((item: any) => ({ price: item.priceId, quantity: item.quantity }));
+
+					// Add the recurring shipping item if the ID is set and there are subscription items
+					if (shippingPriceId && subscriptionItems.length > 0) {
+						subscriptionItems.push({ price: shippingPriceId, quantity: 1 });
+						console.log(`    Added recurring shipping item: ${shippingPriceId}`);
+					}
 
 					const oneTimeItems = cartItems
 						.filter((item: any) => !item.isSubscription)
@@ -792,17 +870,53 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 							});
 							console.log(`            Created local Subscription record: ${newLocalSub.id}`);
 
-							// c) Create Order Record (Existing Logic)
-							// ... (keep existing order creation logic) ...
-							let orderTotalAmount = 0;
+							// c) Create Order Record (Calculation now fetches shipping cost)
+							let orderSubtotal = 0;
 							cartItems.forEach((item: any) => {
 								const price = parseFloat(item.price);
 								if (!isNaN(price)) {
-									orderTotalAmount += price * item.quantity;
+									orderSubtotal += price * item.quantity;
 								}
 							});
-							const totalAmountDecimal = new Decimal(orderTotalAmount.toFixed(2));
+
+							let shippingCost = 0;
+							let shippingPriceDecimal = new Decimal(0);
+							const shippingPriceIdEnv = process.env.STRIPE_SHIPPING_RATE_PRICE_ID;
+							if (orderSubtotal > 0 && shippingPriceIdEnv) {
+								try {
+									const shippingStripePrice = await stripe.prices.retrieve(shippingPriceIdEnv);
+									if (shippingStripePrice && shippingStripePrice.active && shippingStripePrice.unit_amount) {
+										shippingCost = (shippingStripePrice.unit_amount / 100); // Cost in dollars
+										shippingPriceDecimal = new Decimal(shippingCost.toFixed(2));
+									} else {
+										console.warn(`Webhook Warning: Shipping Price ID ${shippingPriceIdEnv} invalid/inactive. Shipping cost not added to order total/items.`);
+									}
+								} catch (priceError: any) {
+									console.error(`Webhook Error fetching shipping price ${shippingPriceIdEnv}: ${priceError.message}. Shipping cost not added.`);
+								}
+							} else if (orderSubtotal > 0) {
+								console.warn("Webhook Warning: STRIPE_SHIPPING_RATE_PRICE_ID not set. Shipping cost not added to order total/items.");
+							}
+
+							const finalTotalAmount = orderSubtotal + shippingCost;
+							const totalAmountDecimal = new Decimal(finalTotalAmount.toFixed(2));
 							
+							// Map cart items and add shipping item conditionally
+							const orderItemsInput = cartItems.map((item: any) => ({
+								productId: item.productId,
+								productName: item.productName || 'Unknown',
+								quantity: item.quantity,
+								price: new Decimal(item.price || 0), 
+							}));
+							if (shippingCost > 0 && shippingPriceIdEnv) {
+								orderItemsInput.push({
+									productId: shippingPriceIdEnv, // Use the actual Price ID
+									productName: 'Shipping', // Keep generic name
+									quantity: 1,
+									price: shippingPriceDecimal // Use fetched price
+								});
+							}
+
 							const newOrder = await tx.order.create({
 								data: {
 									userId: userId,
@@ -820,12 +934,7 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 									shippingCountry: shippingAddress.country,
 									checkoutAttemptId: checkoutAttemptId, // <-- Save the ID
 									items: {
-										create: cartItems.map((item: any) => ({
-											productId: item.productId,
-											productName: item.productName || 'Unknown',
-											quantity: item.quantity,
-											price: new Decimal(item.price || 0), 
-										})),
+										create: orderItemsInput, // Use the combined array
 									},
 								},
 								select: { id: true }
@@ -901,7 +1010,37 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 
 				// --- 4. Create Order for One-Time Purchase --- 
 				console.log(`Webhook (PI Succeeded ${paymentIntent.id}): Processing as one-time purchase order using context ID ${checkoutAttemptId}.`);
-				const totalAmountDecimal = new Decimal(paymentIntent.amount / 100);
+				
+				// Calculate subtotal and shipping cost first
+				let orderSubtotal = 0;
+				cartItems.forEach((item: any) => {
+					const price = parseFloat(item.price);
+					if (!isNaN(price)) {
+						orderSubtotal += price * item.quantity;
+					}
+				});
+				
+				let shippingCost = 0;
+				let shippingPriceDecimal = new Decimal(0);
+				const shippingPriceIdEnv = process.env.STRIPE_SHIPPING_RATE_PRICE_ID;
+				if (orderSubtotal > 0 && shippingPriceIdEnv) {
+					try {
+						const shippingStripePrice = await stripe.prices.retrieve(shippingPriceIdEnv);
+						if (shippingStripePrice && shippingStripePrice.active && shippingStripePrice.unit_amount) {
+							shippingCost = (shippingStripePrice.unit_amount / 100); // Cost in dollars
+							shippingPriceDecimal = new Decimal(shippingCost.toFixed(2));
+						} else {
+							console.warn(`Webhook Warning: Shipping Price ID ${shippingPriceIdEnv} invalid/inactive. Shipping cost not added to order total/items.`);
+						}
+					} catch (priceError: any) {
+						console.error(`Webhook Error fetching shipping price ${shippingPriceIdEnv}: ${priceError.message}. Shipping cost not added.`);
+					}
+				} else if (orderSubtotal > 0) {
+					console.warn("Webhook Warning: STRIPE_SHIPPING_RATE_PRICE_ID not set. Shipping cost not added to order total/items.");
+				}
+
+				const finalTotalAmount = orderSubtotal + shippingCost;
+				const totalAmountDecimal = new Decimal(finalTotalAmount.toFixed(2));
 
 				// Optional: Check if order already exists with this checkoutAttemptId to prevent duplicates
 				const existingOrder = await prisma.order.findUnique({ where: { checkoutAttemptId } });
@@ -910,6 +1049,22 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 					// Delete the temporary context data even if duplicate order found
 					await deleteCheckoutAttempt(checkoutAttemptId);
 					break;
+				}
+
+				// Map cart items and add shipping item conditionally
+				const orderItemsInput = cartItems.map((item: any) => ({
+					productId: item.productId,
+					productName: item.productName || 'Unknown',
+					quantity: item.quantity,
+					price: new Decimal(item.price || 0), 
+				}));
+				if (shippingCost > 0 && shippingPriceIdEnv) {
+					orderItemsInput.push({
+						productId: shippingPriceIdEnv, // Use the actual Price ID
+						productName: 'Shipping', // Keep generic name
+						quantity: 1,
+						price: shippingPriceDecimal // Use fetched price
+					});
 				}
 
 				const newOrder = await prisma.order.create({ // Use transaction later if needed
@@ -930,12 +1085,7 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 						shippingCountry: shippingAddress.country,
 						checkoutAttemptId: checkoutAttemptId, // <-- Save the ID
 						items: {
-							create: cartItems.map((item: any) => ({
-								productId: item.productId,
-								productName: item.productName || 'Unknown',
-								quantity: item.quantity,
-								price: new Decimal(item.price || 0), 
-							})),
+							create: orderItemsInput, // Use the combined array
 						},
 					},
 					select: { id: true }
@@ -1093,17 +1243,28 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 						
 						// 4. Create Renewal Order 
 						console.log(`    ---> Inside Renewal Transaction: Creating renewal Order for Invoice ${paidInvoice.id}`);
-						const lineItem = paidInvoice.lines.data[0];
-						const lineItemPrice = (lineItem as any)?.price;
-						if (!lineItem || !lineItemPrice || typeof lineItemPrice.unit_amount !== 'number') {
-							console.warn(`    WARNING: Invoice ${paidInvoice.id} renewal line item invalid. Skipping order creation.`);
-							return; // Exit transaction block if line item is invalid
+						
+						// Create OrderItem data for ALL line items on the invoice
+						const orderItemsData = paidInvoice.lines.data.map(lineItem => {
+							const lineItemPrice = (lineItem as any)?.price; // Type assertion to access price
+							return {
+								productId: typeof lineItemPrice?.product === 'string' ? lineItemPrice.product : 'unknown',
+								productName: lineItem.description || 'Subscription Item',
+								quantity: lineItem.quantity || 1,
+								price: new Decimal((lineItem.amount / 100) / (lineItem.quantity || 1)), // Calculate unit price
+							};
+						}).filter(item => item.price.greaterThan(0)); // Filter out zero-amount items if any
+
+						if (orderItemsData.length === 0) {
+							console.warn(`    WARNING: Invoice ${paidInvoice.id} renewal has no valid line items. Skipping order creation.`);
+							return; // Exit transaction block if no valid items
 						}
+
 						await tx.order.create({
 							data: {
 								userId: localSubscription.userId,
 								subscriptionId: localSubscription.id,
-								totalAmount: new Decimal(paidInvoice.amount_paid / 100),
+								totalAmount: new Decimal(paidInvoice.amount_paid / 100), // Use the total paid amount from Stripe
 								status: 'PAID',
 								contactEmail: paidInvoice.customer_email || localSubscription.user?.email || 'unknown',
 								shippingName: paidInvoice.customer_name || localSubscription.user?.name || 'N/A',
@@ -1113,18 +1274,13 @@ router.post('/webhook', stripeWebhookMiddleware, async (req: Request, res: Respo
 								shippingPostalCode: paidInvoice.customer_shipping?.address?.postal_code || 'N/A',
 								shippingCountry: paidInvoice.customer_shipping?.address?.country || 'N/A',
 								items: {
-									create: [{
-										productId: typeof lineItemPrice.product === 'string' ? lineItemPrice.product : 'unknown',
-										productName: lineItem.description || 'Subscription Renewal',
-										quantity: lineItem.quantity || 1,
-										price: new Decimal(lineItemPrice.unit_amount / 100),
-									}]
+									create: orderItemsData // Use the mapped array of all items
 								}
 							}
 						});
 						console.log(`    ---> Inside Renewal Transaction: Renewal Order created successfully.`);
 					}); // End Renewal Transaction
-	} catch (error: any) {
+				} catch (error: any) {
 					// Catch errors during the renewal transaction
 					console.error(`---> ERROR processing renewal transaction for invoice ${paidInvoice.id}:`, error);
 				}

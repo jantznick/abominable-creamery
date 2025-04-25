@@ -90,7 +90,12 @@ app.get('*', async (req: Request, res: Response) => {
 		console.error("SSR Error fetching products:", error);
 	}
 
-	const initialDataScript = `<script>window.__INITIAL_DATA__ = ${JSON.stringify({ flavors: flavorsData }).replace(/</g, '\\u003c')}</script>`;
+	// Combine initial data
+	const initialData = { 
+		flavors: flavorsData,
+		// REMOVED shippingRate: shippingRateData
+	 };
+	const initialDataScript = `<script>window.__INITIAL_DATA__ = ${JSON.stringify(initialData).replace(/</g, '\\u003c')}</script>`;
 
 	const appHtml = renderToString(
 		<StaticRouter location={req.url}>

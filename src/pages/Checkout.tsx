@@ -6,6 +6,7 @@ import { loadStripe, StripeElementsOptions } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import classNames from 'classnames'; // Import classnames for conditional styling
 import { Address, ApiSavedCard } from '../types/data'; // Import shared Address type and ApiSavedCard type
+import { formatPhoneNumber } from '../utils/formatting';
 
 // Load Stripe outside of component rendering to avoid recreating Stripe object on every render
 // Make sure STRIPE_PUBLISHABLE_KEY is defined in your .env and exposed via Webpack DefinePlugin
@@ -181,6 +182,10 @@ const PaymentSectionContent: React.FC<PaymentSectionContentProps> = ({
 	const [isPayingWithSavedCard, setIsPayingWithSavedCard] = useState(false);
 	const [savedCardPaymentError, setSavedCardPaymentError] = useState<string | null>(null);
 
+	// State for saved card setup processing
+	const [isSettingUpWithSavedCard, setIsSettingUpWithSavedCard] = useState(false);
+	const [savedCardSetupError, setSavedCardSetupError] = useState<string | null>(null);
+
 	// Handler needed here
 	const handlePayWithSavedCard = async () => {
 		if (!stripe || !clientSecret || !selectedCardId || !checkoutAttemptId) {
@@ -216,6 +221,52 @@ const PaymentSectionContent: React.FC<PaymentSectionContentProps> = ({
 		}
 
 		setIsPayingWithSavedCard(false);
+	};
+
+	// Handler for confirming SetupIntent with a saved card
+	const handleSetupWithSavedCard = async () => {
+		if (!stripe || !clientSecret || !selectedCardId || !checkoutAttemptId) {
+			console.error("Missing Stripe, clientSecret, selectedCardId, or checkoutAttemptId for saved card setup.");
+			setSavedCardSetupError("Payment system not ready or card not selected.");
+			return;
+		}
+
+		// Save checkoutAttemptId before confirming (still useful for potential debugging/linking)
+		try {
+			sessionStorage.setItem('checkoutDataForConfirmation', checkoutAttemptId);
+			console.log("Saved checkoutAttemptId to sessionStorage for SetupIntent.");
+		} catch (error) {
+			console.error("Error saving checkoutAttemptId to sessionStorage:", error);
+			setSavedCardSetupError("Error preparing session data. Please try again.");
+			return;
+		}
+
+		setIsSettingUpWithSavedCard(true);
+		setSavedCardSetupError(null);
+
+		console.log(`Confirming SetupIntent ${clientSecret} with saved card ${selectedCardId}`);
+		// confirmSetup uses return_url, no need for manual navigation here
+		const { error } = await stripe.confirmSetup({
+			clientSecret,
+			confirmParams: {
+				// Ensure the return URL is the same as the one used in StripeCheckoutForm
+				return_url: `${window.location.origin}/order-confirmation`,
+				payment_method: selectedCardId, // Specify the saved payment method
+			},
+		});
+
+		if (error) {
+			console.error("Error confirming saved card setup:", error);
+			setSavedCardSetupError(error.message || "Failed to confirm payment method setup.");
+		} else {
+			// If successful, Stripe.js redirects automatically via the return_url
+			console.log("Saved card setup successful (client-side), Stripe should redirect...");
+		}
+
+		// Only set loading false if there was an error, otherwise redirect happens
+		if (error) {
+		    setIsSettingUpWithSavedCard(false);
+        }
 	};
 
 	// JSX moved here
@@ -264,17 +315,33 @@ const PaymentSectionContent: React.FC<PaymentSectionContentProps> = ({
 				<div className="p-4 bg-slate-100 border border-slate-200 rounded-md text-sm text-slate-700 space-y-3">
 					<p>Using saved card: <span className="font-medium">{savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.brand.toUpperCase()} ending in {savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.last4}</span>.</p>
 					<button 
-						onClick={handlePayWithSavedCard} 
-						disabled={isPayingWithSavedCard || !stripe || !clientSecret || !selectedCardId} 
+						// Conditionally call the correct handler
+						onClick={containsSubscription ? handleSetupWithSavedCard : handlePayWithSavedCard} 
+						// Disable button based on appropriate loading state and conditions
+						disabled={
+							(containsSubscription ? isSettingUpWithSavedCard : isPayingWithSavedCard) || 
+							!stripe || 
+							!clientSecret || 
+							!selectedCardId
+						} 
 						className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg text-lg transition-colors duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
 					>
-						{isPayingWithSavedCard ? (
+						{/* Show correct loading spinner */} 
+						{(containsSubscription ? isSettingUpWithSavedCard : isPayingWithSavedCard) ? (
 							<div className="spinner border-t-2 border-white border-solid rounded-full w-5 h-5 animate-spin mx-auto"></div>
 						) : (
-							`Pay $${total.toFixed(2)} with Saved Card`
+							// Show correct button text
+							containsSubscription ? 
+								'Confirm Payment Method for Subscription' : 
+								`Pay $${total.toFixed(2)} with Saved Card`
 						)}
 					</button>
-					{savedCardPaymentError && <p className="text-red-600 text-sm mt-2 text-center">{savedCardPaymentError}</p>}
+					{/* Show correct error message */} 
+					{(containsSubscription ? savedCardSetupError : savedCardPaymentError) && 
+						<p className="text-red-600 text-sm mt-2 text-center">
+							{containsSubscription ? savedCardSetupError : savedCardPaymentError}
+						</p>
+					}
 				</div>
 			)}
 
@@ -302,7 +369,6 @@ const PaymentSectionContent: React.FC<PaymentSectionContentProps> = ({
 type CheckoutSection = 'auth_choice' | 'contact' | 'shipping' | 'payment';
 
 // --- Constants ---
-const FLAT_SHIPPING_RATE = 9.99; // Example flat shipping rate
 const ESTIMATED_TAX_RATE = 0.08; // Example 8% tax rate
 
 export const Checkout = () => {
@@ -353,13 +419,48 @@ export const Checkout = () => {
 	// --- State for "Save Card" checkbox ---
 	const [saveNewCardForFuture, setSaveNewCardForFuture] = useState<boolean>(false);
 
-	// Calculate Costs
+	// --- Shipping Rate State --- 
+	const [shippingRate, setShippingRate] = useState<number | null>(null);
+	const [isLoadingShippingRate, setIsLoadingShippingRate] = useState(true);
+	const [errorLoadingShippingRate, setErrorLoadingShippingRate] = useState<string | null>(null);
+
+	// --- Get shipping rate from API --- 
+	useEffect(() => {
+		setIsLoadingShippingRate(true);
+		setErrorLoadingShippingRate(null);
+		fetch('/api/stripe/shipping-rate')
+			.then(async (res) => {
+				if (!res.ok) {
+					const errorData = await res.json().catch(() => ({}));
+					throw new Error(errorData.error || `Server error: ${res.status}`);
+				}
+				return res.json();
+			})
+			.then((data) => {
+				if (typeof data.amount === 'number') {
+					setShippingRate(data.amount);
+					console.log("Checkout: Fetched shipping rate:", data.amount);
+				} else {
+					throw new Error("Invalid shipping rate received from server.");
+				}
+			})
+			.catch((err) => {
+				console.error("Checkout: Failed to fetch shipping rate:", err);
+				setErrorLoadingShippingRate(err.message || "Could not load shipping cost.");
+				setShippingRate(9.99); // Use fallback on error
+				console.warn("Using fallback shipping rate $9.99 due to fetch error.")
+			})
+			.finally(() => {
+				setIsLoadingShippingRate(false);
+			});
+	}, []); // Fetch once on mount
+
+	// Calculate Costs (now depends on fetched shipping rate)
 	const subtotal = getCartTotal();
-	const shippingCost = items.length > 0 ? FLAT_SHIPPING_RATE : 0; // Only apply shipping if cart not empty
-	const estimatedTax = subtotal * ESTIMATED_TAX_RATE;
-	const total = subtotal + shippingCost + estimatedTax;
-	const totalInCents = Math.round(total * 100); // Use the final total for Stripe
-	const totalInDollars = total; // Use the calculated total for checkoutData
+	// Use fetched rate, handle loading state by showing 0 temporarily, use fallback on error (already set in state)
+	const currentShippingRate = isLoadingShippingRate ? 0 : (shippingRate ?? 9.99); 
+	const shippingCost = items.length > 0 ? currentShippingRate : 0; 
+	const total = subtotal + shippingCost; 
 
 	// Validation Logic
 	const canCompleteContact = useMemo(() => email.trim() !== '' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && phone.trim() !== '', [email, phone]);
@@ -676,7 +777,7 @@ export const Checkout = () => {
 
 			const dataToSave: CheckoutData & { shouldSaveAddress?: boolean } = {
 				items: mappedItems,
-				totalAmount: totalInDollars,
+				totalAmount: total,
 				shippingAddress: {
 					fullName,
 					address1,
@@ -704,7 +805,7 @@ export const Checkout = () => {
 			return null;
 		}
 	}, [
-		items, isContactComplete, isShippingComplete, totalInDollars,
+		items, isContactComplete, isShippingComplete, total,
 		fullName, address1, address2, city, state, postalCode, country,
 		email, phone,
 		auth.user, selectedAddressId, saveNewAddress // Correctly merge dependencies
@@ -920,15 +1021,24 @@ export const Checkout = () => {
 							</div>
 							<div className="flex justify-between text-sm text-slate-600">
 								<span>Shipping</span>
-								<span>${shippingCost.toFixed(2)}</span>
+								{/* Show loading indicator or error for shipping */}
+								{isLoadingShippingRate ? (
+									<span className="italic text-slate-400">Loading...</span>
+								) : errorLoadingShippingRate ? (
+									<span className="text-red-500 text-xs">Error</span> // Or display fallback price
+								) : (
+									<span>${shippingCost.toFixed(2)}</span>
+								)}
 							</div>
-							<div className="flex justify-between text-sm text-slate-600">
-								<span>Estimated Tax</span>
-								<span>${estimatedTax.toFixed(2)}</span>
-							</div>
+							{/* Tax Row Removed */}
 							<div className="flex justify-between text-lg font-bold text-slate-900 border-t border-slate-300 pt-3 mt-3">
 								<span>Total</span>
-								<span>${total.toFixed(2)}</span>
+								{/* Show loading for total as well */}
+								{isLoadingShippingRate ? (
+									<span className="italic text-slate-400">Calculating...</span>
+								) : (
+									<span>${total.toFixed(2)}</span>
+								)}
 							</div>
 						</div>
 

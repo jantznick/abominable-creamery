@@ -32,6 +32,13 @@ export const getStripeProducts = async (stripe: Stripe): Promise<Flavor[]> => {
 
         // 2. Fetch prices for each product and map
         const flavorPromises = products.data.map(async (product): Promise<Flavor | null> => {
+            
+            // --- Filter based on metadata BEFORE fetching prices ---
+            if (parseBooleanMetadata(product.metadata?.notFlavor)) {
+                console.log(`Product ${product.id} (${product.name}) has 'notFlavor=true' metadata. Skipping.`);
+                return null; // Skip this product entirely
+            }
+            
             // 3. Fetch all active prices for this product
             const prices = await stripe.prices.list({
                 product: product.id,
@@ -78,10 +85,10 @@ export const getStripeProducts = async (stripe: Stripe): Promise<Flavor[]> => {
         // Wait for all price fetching and mapping to complete
         const resolvedFlavors = await Promise.all(flavorPromises);
 
-        // Filter out any nulls (products skipped due to no prices)
+        // Filter out any nulls (products skipped due to no prices OR 'notFlavor' metadata)
         const validFlavors = resolvedFlavors.filter((flavor): flavor is Flavor => flavor !== null);
 
-        return validFlavors;
+        return validFlavors; // Return the already filtered list
 
     } catch (error) {
         console.error("Error fetching products or prices from Stripe:", error);

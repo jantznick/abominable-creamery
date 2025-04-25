@@ -196,6 +196,9 @@ export const Checkout = () => {
 	const [errorLoadingCards, setErrorLoadingCards] = useState<string | null>(null);
 	const [selectedCardId, setSelectedCardId] = useState<string>(''); // Use PM ID or empty string for "New Card"
 
+	// --- State for "Save Card" checkbox ---
+	const [saveNewCardForFuture, setSaveNewCardForFuture] = useState<boolean>(false);
+
 	// Calculate Costs
 	const subtotal = getCartTotal();
 	const shippingCost = items.length > 0 ? FLAT_SHIPPING_RATE : 0; // Only apply shipping if cart not empty
@@ -215,6 +218,9 @@ export const Checkout = () => {
 		country.trim() !== '',
 		[fullName, address1, city, state, postalCode, country]
 	);
+
+	// Determine if cart contains subscription items
+	const containsSubscription = useMemo(() => items.some(item => item.isSubscription), [items]);
 
 	// Effect to redirect if cart is empty
 	useEffect(() => {
@@ -675,10 +681,10 @@ export const Checkout = () => {
 					{activeSection !== 'auth_choice' && (
 						<div className={classNames(
 							"bg-white p-6 rounded-lg shadow-md",
-							{ 'opacity-50 pointer-events-none': !isShippingComplete } // Disable based on previous step completion
+							{ 'opacity-50 pointer-events-none': !isShippingComplete }
 						)}
 						>
-							{renderSectionHeader('payment', '3. Payment', false)} {/* Payment never shows as 'complete' */}
+							{renderSectionHeader('payment', '3. Payment', false)}
 							<div className="mb-6">
 								<label htmlFor="orderNotes" className="block text-sm font-medium text-slate-700 mb-1">
 									Order Notes (Optional)
@@ -693,26 +699,92 @@ export const Checkout = () => {
 									placeholder="Add any special instructions or notes for your order..."
 								/>
 							</div>
-							{/* Show Stripe form IF this section is active AND previous is complete */}
+
+							{/* Show Payment content IF this section is active AND previous is complete */}
 							{activeSection === 'payment' && isShippingComplete ? (
-								<div>
-									{/* ... Loading/Error logic ... */}
+								<div className="space-y-4">
+									{/* Loading/Error for client secret */}
 									{isLoadingSecret && <p className="text-center text-slate-500"><div className="spinner border-t-2 border-indigo-500 border-solid rounded-full w-5 h-5 animate-spin mx-auto mb-2"></div>Initializing payment...</p>}
 									{errorLoadingSecret && <p className="text-center text-red-600">{errorLoadingSecret}</p>}
-									{clientSecret && checkoutAttemptId && stripePromise && options && (
-										<Elements options={options} stripe={stripePromise}>
-											<StripeCheckoutForm
-												clientSecret={clientSecret}
-												checkoutAttemptId={checkoutAttemptId}
-											/>
-										</Elements>
-									)}
 									{!clientSecret && !checkoutAttemptId && !isLoadingSecret && !errorLoadingSecret && (
 										<p className="text-center text-red-600">Failed to initialize payment session. Please refresh or contact support.</p>
 									)}
-								</div>
+
+									{/* Render content only when client secret is ready */}
+									{clientSecret && checkoutAttemptId && stripePromise && options && (
+										<>
+											{/* --- Saved Card Selection --- */} 
+											{auth.user && (
+												<div className="mb-4">
+													<label htmlFor="saved-card-select" className="block text-sm font-medium text-slate-700 mb-1">
+														Payment Method
+													</label>
+													{isLoadingCards && <p className="text-sm text-slate-500">Loading saved cards...</p>}
+													{errorLoadingCards && <p className="text-sm text-red-600">Error loading cards: {errorLoadingCards}</p>}
+													{!isLoadingCards && (
+														<select 
+															id="saved-card-select"
+															value={selectedCardId}
+															onChange={handleSelectCard}
+															className="block w-full rounded-md border-slate-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2"
+															disabled={savedCards.length === 0}
+														>
+															<option value="">Enter New Card Details</option>
+															{savedCards.map(card => (
+																<option key={card.stripePaymentMethodId} value={card.stripePaymentMethodId}>
+																	{card.brand.toUpperCase()} ending in {card.last4} {card.isDefault ? '(Default)' : ''}
+																</option>
+															))}
+														</select>
+													)}
+												</div>
+											)}
+
+											{/* --- Subscription Notification --- */} 
+											{containsSubscription && auth.user && selectedCardId === '' && (
+												<div className="p-3 mb-4 bg-blue-50 border border-blue-200 rounded-md text-sm text-blue-700">
+													<span className="font-semibold">Note:</span> Your payment method will be saved for managing your subscription.
+												</div>
+											)}
+
+											{/* --- Stripe Elements / Saved Card Placeholder --- */} 
+											{(!auth.user || selectedCardId === '') ? (
+												// Show Elements if guest or new card selected
+												<Elements options={options} stripe={stripePromise}>
+													<StripeCheckoutForm clientSecret={clientSecret} checkoutAttemptId={checkoutAttemptId} />
+												</Elements>
+											) : (
+												// Show placeholder if logged in and saved card selected
+												<div className="p-4 bg-slate-100 border border-slate-200 rounded-md text-sm text-slate-700">
+													<p>Using saved card: <span className="font-medium">{savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.brand.toUpperCase()} ending in {savedCards.find(c => c.stripePaymentMethodId === selectedCardId)?.last4}</span>.</p>
+													{/* TODO: Add button to confirm payment with saved card */} 
+													<button disabled className="mt-3 w-full bg-indigo-400 text-white font-bold py-3 px-6 rounded-lg text-lg disabled:opacity-70 cursor-not-allowed">
+														Pay with Saved Card (Coming Soon)
+													</button>
+												</div>
+											)}
+
+											{/* --- Save Card Checkbox --- */}
+											{auth.user && selectedCardId === '' && !containsSubscription && (
+												<div className="flex items-center mt-4 pt-4 border-t border-slate-200">
+													<input 
+														id="saveNewCardForFuture" 
+														name="saveNewCardForFuture" 
+														type="checkbox" 
+														checked={saveNewCardForFuture} 
+														onChange={(e) => setSaveNewCardForFuture(e.target.checked)} 
+														className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+													/>
+													<label htmlFor="saveNewCardForFuture" className="ml-2 block text-sm text-gray-900">
+														Save this card for future purchases
+													</label>
+												</div>
+											)}
+										</>
+									)}
+								</div> // End conditional content div
 							) : null} {/* Don't show payment form if prerequisites not met */}
-						</div>
+						</div> // End payment step div
 					)}
 				</div>
 

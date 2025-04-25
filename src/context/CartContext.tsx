@@ -1,4 +1,5 @@
 import React, { createContext, useState, useContext, ReactNode, useMemo, useEffect } from 'react';
+import toast from 'react-hot-toast'; // Import toast
 
 // --- Types ---
 
@@ -90,33 +91,37 @@ export const CartProvider: React.FC<CartProviderProps> = ({ children }) => {
         }
     }, [items]); 
 
-    // Add item to cart (store slug)
+    // Add item to cart
     const addItem = (itemToAdd: AddItemPayload, quantity: number = 1) => {
+        let itemAddedName = itemToAdd.name; // Store name for toast message
         setItems(prevItems => {
             const existingItem = prevItems.find(item => item.priceId === itemToAdd.priceId);
             if (existingItem) {
-                // IMPORTANT: Ensure we don't change subscription status when adding more quantity
+                // Update name for toast if item already exists
+                itemAddedName = existingItem.name;
                 return prevItems.map(item =>
                     item.priceId === itemToAdd.priceId
-                        ? { ...item, quantity: item.quantity + quantity } // Only update quantity
+                        ? { ...item, quantity: item.quantity + quantity }
                         : item
                 );
             } else {
-                // Add new item, including slug and subscription details
                 const newItem: CartItem = {
                     priceId: itemToAdd.priceId,
                     productId: itemToAdd.productId, 
-                    slug: itemToAdd.slug, // Store slug
+                    slug: itemToAdd.slug,
                     name: itemToAdd.name,
                     price: itemToAdd.price,
                     quantity: quantity,
                     imageSrc: itemToAdd.imageSrc,
-                    isSubscription: itemToAdd.isSubscription, // Store subscription flag
-                    recurringInterval: itemToAdd.recurringInterval, // Store interval
+                    isSubscription: itemToAdd.isSubscription,
+                    recurringInterval: itemToAdd.recurringInterval,
                 };
+                 // itemAddedName is already set correctly for new items
                 return [...prevItems, newItem];
             }
         });
+        // Display toast notification
+        toast.success(`${quantity} x ${itemAddedName} added to cart!`);
         console.log("Added item (Price ID):", itemToAdd.priceId, "Product ID:", itemToAdd.productId, "Slug:", itemToAdd.slug, "Quantity:", quantity);
     };
 

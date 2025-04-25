@@ -5,9 +5,10 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSwitchToSignup: () => void; // Function to open the signup modal
+  onSwitchToForgotPassword: () => void; // ADDED: Function to open forgot password modal
 }
 
-const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSignup }) => {
+const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSignup, onSwitchToForgotPassword }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -60,9 +61,14 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
     }
   };
 
-  const handleSwitch = () => {
-    onClose(); 
-    onSwitchToSignup(); 
+  const handleSwitchToSignup = () => {
+    onClose();
+    onSwitchToSignup();
+  }
+
+  const handleSwitchToForgotPassword = () => {
+    onClose();
+    onSwitchToForgotPassword();
   }
 
   if (!isOpen) {
@@ -101,21 +107,31 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
               disabled={isLoading}
             />
           </div>
-          <div className="mb-6">
-            <label htmlFor="login-password" className="block text-gray-700 text-sm font-bold mb-2">
-              Password
-            </label>
+          <div className="mb-4">
+             <div className="flex justify-between items-baseline mb-2">
+                <label htmlFor="login-password" className="block text-gray-700 text-sm font-bold">
+                    Password
+                </label>
+                 <button
+                    type="button"
+                    onClick={handleSwitchToForgotPassword}
+                    className="inline-block align-baseline font-bold text-sm text-blue-500 hover:text-blue-800"
+                    disabled={isLoading}
+                >
+                    Forgot Password?
+                </button>
+            </div>
             <input
               type="password"
               id="login-password" // Use unique ID for accessibility
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 mb-3 leading-tight focus:outline-none focus:shadow-outline"
+              className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
               required
               disabled={isLoading}
             />
           </div>
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6">
             <button
               type="submit"
               className={`w-full sm:w-auto bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline ${
@@ -127,7 +143,7 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, onSwitchToSign
             </button>
             <button
                 type="button" // Important: Prevent form submission
-                onClick={handleSwitch}
+                onClick={handleSwitchToSignup}
                 className="w-full sm:w-auto text-center sm:text-right inline-block align-baseline font-bold text-sm text-green-500 hover:text-green-800"
             >
               Need an account? Sign Up

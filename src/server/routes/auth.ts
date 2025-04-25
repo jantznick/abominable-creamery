@@ -2,7 +2,9 @@ import express, { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import prisma from '../db'; // Import the singleton instance
 // Import SessionUser from the shared types file
-import { SessionUser } from '../types'; 
+import { SessionUser } from '../types';
+// import { v4 as uuidv4 } from 'uuid'; // REMOVE - Use built-in crypto
+import crypto from 'crypto'; // ADD - For randomUUID
 
 const router: Router = express.Router();
 const SALT_ROUNDS = 10; // Cost factor for bcrypt hashing
@@ -174,6 +176,152 @@ router.get('/me', (req: Request, res: Response) => {
         res.status(200).json({ user: req.session.user });
     } else {
         res.status(401).json({ message: 'Not authenticated' }); // Unauthorized
+    }
+});
+
+// POST /api/auth/request-password-reset
+router.post('/request-password-reset', async (req: Request, res: Response) => {
+    const { email } = req.body;
+
+    if (!email || !isValidEmail(email)) {
+        // Even if email is invalid, return a generic message to avoid user enumeration
+        return res.status(200).json({ message: 'If an account with that email exists, a password reset link has been processed.' });
+    }
+
+    try {
+        const user = await prisma.user.findUnique({ where: { email } });
+
+        if (user) {
+            // Generate a unique token
+            // const token = uuidv4(); // REMOVE
+            const token = crypto.randomUUID(); // ADD - Use built-in method
+            // Set expiry time (e.g., 1 hour from now)
+            const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+            // Store the token, associating it with the user and email
+            await prisma.passwordResetToken.create({
+                data: {
+                    token,
+                    userId: user.id,
+                    email: user.email, // Store email used for request for extra verification
+                    expiresAt,
+                },
+            });
+
+            // Construct the reset URL (adjust FRONTEND_URL as needed)
+            // TODO: Replace 'http://localhost:3000' with an environment variable for the frontend URL
+            const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+            const resetUrl = `${frontendUrl}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+
+            // Log the URL (replace with email sending later)
+            console.log(`Password Reset URL for ${email}: ${resetUrl}`);
+        }
+
+        // Always return a generic success message regardless of whether the user was found
+        // This prevents attackers from discovering registered emails.
+        res.status(200).json({ message: 'If an account with that email exists, a password reset link has been processed.' });
+
+    } catch (error) {
+        console.error("Request Password Reset Error:", error);
+        // Even in case of internal error, send a generic message if possible,
+        // unless it's a fundamental issue preventing any response.
+        res.status(500).json({ message: 'An internal error occurred. Please try again later.' });
+    }
+});
+
+// POST /api/auth/reset-password
+router.post('/reset-password', async (req: Request, res: Response) => {
+    const { token, email, password } = req.body;
+
+    // Basic Validation
+    if (!token || !email || !password) {
+        return res.status(400).json({ message: 'Token, email, and new password are required.' });
+    }
+    if (!isValidEmail(email)) {
+        return res.status(400).json({ message: 'Invalid email format.' });
+    }
+    if (password.length < 6) { // Reuse same password length requirement
+        return res.status(400).json({ message: 'Password must be at least 6 characters long.' });
+    }
+
+    try {
+        // 1. Find the token and verify email match and expiry
+        const resetToken = await prisma.passwordResetToken.findUnique({
+            where: { token },
+        });
+
+        if (!resetToken) {
+            return res.status(400).json({ message: 'Invalid or expired password reset token.' });
+        }
+        if (resetToken.email !== email) {
+             // Email in request doesn't match the one associated with the token
+            console.warn(`Password reset attempt with mismatched email for token ${token}. Request email: ${email}, Token email: ${resetToken.email}`);
+            return res.status(400).json({ message: 'Invalid password reset request.' });
+        }
+         if (new Date() > resetToken.expiresAt) {
+            // Clean up expired token while we're here (optional, could also have a scheduled job)
+            await prisma.passwordResetToken.delete({ where: { id: resetToken.id } });
+            return res.status(400).json({ message: 'Password reset token has expired.' });
+        }
+
+        // 2. Find the associated user
+        const user = await prisma.user.findUnique({
+            where: { id: resetToken.userId },
+             // Select fields needed for session
+            select: {
+                id: true,
+                email: true,
+                name: true,
+                phone: true,
+                role: true,
+                stripeCustomerId: true
+            }
+        });
+
+        if (!user) {
+            // Should not happen if token exists, but good to check
+            console.error(`User not found for valid reset token ID: ${resetToken.id}, UserID: ${resetToken.userId}`);
+            // Invalidate the token as something is wrong
+             await prisma.passwordResetToken.delete({ where: { id: resetToken.id } });
+            return res.status(404).json({ message: 'User associated with this token not found.' });
+        }
+
+        // 3. Hash the new password
+        const newPasswordHash = await bcrypt.hash(password, SALT_ROUNDS);
+
+        // 4. Update the user's password
+        await prisma.user.update({
+            where: { id: user.id },
+            data: { passwordHash: newPasswordHash },
+        });
+
+        // 5. Delete the used token
+        await prisma.passwordResetToken.delete({ where: { id: resetToken.id } });
+
+        // 6. Log the user in (create a new session)
+        req.session.regenerate((err) => {
+             if (err) {
+                console.error("Session regeneration failed after password reset:", err);
+                // Even if session fails, password was reset. Send success but maybe indicate login failed.
+                return res.status(500).json({ message: 'Password successfully reset, but failed to log you in automatically. Please log in manually.' });
+            }
+
+            // Assign ONLY fields defined in SessionUser
+            req.session.user = {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+                phone: user.phone,
+                role: user.role,
+                stripeCustomerId: user.stripeCustomerId
+            };
+            console.log(`User ${user.email} password reset and logged in.`);
+            res.status(200).json({ user: req.session.user }); // Send back session user data
+        });
+
+    } catch (error) {
+        console.error("Reset Password Error:", error);
+        res.status(500).json({ message: 'Internal server error during password reset.' });
     }
 });
 

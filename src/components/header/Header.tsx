@@ -7,6 +7,7 @@ import { useCart } from '../../context/CartContext';
 import { useAuth } from '../../context/AuthContext';
 import LoginModal from '../auth/LoginModal';
 import SignupModal from '../auth/SignupModal';
+import ForgotPasswordModal from '../auth/ForgotPasswordModal';
 import { CartHoverCard } from './CartHoverCard';
 
 export const Header = () => {
@@ -27,7 +28,11 @@ export const Header = () => {
 		openSignup, 
 		closeSignup,
 		switchToLogin,
-		switchToSignup
+		switchToSignup,
+		isForgotPasswordOpen,
+		openForgotPassword,
+		closeForgotPassword,
+		switchToForgotPassword
 	} = useAuth();
 
 	const itemCount = getItemCount();
@@ -254,10 +259,16 @@ export const Header = () => {
 				isOpen={isLoginOpen}
 				onClose={closeLogin}
 				onSwitchToSignup={switchToSignup}
+				onSwitchToForgotPassword={switchToForgotPassword}
 			/>
 			<SignupModal
 				isOpen={isSignupOpen}
 				onClose={closeSignup}
+				onSwitchToLogin={switchToLogin}
+			/>
+			<ForgotPasswordModal
+				isOpen={isForgotPasswordOpen} 
+				onClose={closeForgotPassword}
 				onSwitchToLogin={switchToLogin}
 			/>
 		</div>

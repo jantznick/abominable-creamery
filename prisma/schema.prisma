@@ -47,6 +47,7 @@ model User {
   addresses     Address[] // Relation to Addresses
   subscriptions Subscription[] // Add relation to Subscriptions
   savedCards    SavedCard[] // Relation to Saved Cards
+  passwordResetTokens PasswordResetToken[] // ADD: Relation to PasswordResetToken
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -187,13 +188,28 @@ model CheckoutAttempt {
 }
 // -------------------------------
 
+// --- ADD Password Reset Token model ---
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  token     String   @unique // The unique reset token (e.g., UUID)
+  userId    Int      // Relation to the User
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade) // Cascade delete if user is deleted
+  email     String   // User's email at the time of request (for verification)
+  expiresAt DateTime // Timestamp when the token expires
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt]) // Index for cleaning up expired tokens
+}
+// ------------------------------------
+
 // --- Removed Model for Temporary Checkout Context ---
 // model PendingOrderContext {
 //   paymentIntentId String @id @unique
 //   userId             Int?
 //   stripeSubscriptionId String
-//   stripeInvoiceId    String 
-//   cartDetails        String 
+//   stripeInvoiceId    String
+//   cartDetails        String
 //   createdAt          DateTime  @default(now())
 //   @@index([createdAt])
 // }

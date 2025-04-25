@@ -21,12 +21,16 @@ interface AuthContextType {
   // Modal State and Controls
   isLoginOpen: boolean;
   isSignupOpen: boolean;
+  isForgotPasswordOpen: boolean;
   openLogin: () => void;
   closeLogin: () => void;
   openSignup: () => void;
   closeSignup: () => void;
+  openForgotPassword: () => void;
+  closeForgotPassword: () => void;
   switchToLogin: () => void;
   switchToSignup: () => void;
+  switchToForgotPassword: () => void;
 }
 
 // Create the context with a default value (or null/undefined if preferred)
@@ -43,30 +47,44 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true); // Start loading until auth check is done
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [isSignupOpen, setIsSignupOpen] = useState(false);
+  const [isForgotPasswordOpen, setIsForgotPasswordOpen] = useState(false);
 
   // --- Modal Control Functions ---
   const openLogin = () => {
-    closeSignup(); // Ensure signup is closed first
+    closeSignup();
+    closeForgotPassword();
     setIsLoginOpen(true);
   };
   const closeLogin = () => setIsLoginOpen(false);
 
   const openSignup = () => {
-    closeLogin(); // Ensure login is closed first
+    closeLogin();
+    closeForgotPassword();
     setIsSignupOpen(true);
   };
   const closeSignup = () => setIsSignupOpen(false);
 
+  const openForgotPassword = () => {
+    closeLogin();
+    closeSignup();
+    setIsForgotPasswordOpen(true);
+  };
+  const closeForgotPassword = () => setIsForgotPasswordOpen(false);
+
   const switchToSignup = () => {
     closeLogin();
-    // Use timeout to allow fade-out transition before fade-in
-    setTimeout(() => setIsSignupOpen(true), 150); // Small delay
+    setTimeout(() => openSignup(), 150);
   };
 
   const switchToLogin = () => {
     closeSignup();
-    // Use timeout to allow fade-out transition before fade-in
-    setTimeout(() => setIsLoginOpen(true), 150); // Small delay
+    closeForgotPassword();
+    setTimeout(() => openLogin(), 150);
+  };
+
+  const switchToForgotPassword = () => {
+    closeLogin();
+    setTimeout(() => openForgotPassword(), 150);
   };
   // --- End Modal Control Functions ---
 
@@ -132,12 +150,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     // Pass modal state and functions through context
     isLoginOpen,
     isSignupOpen,
+    isForgotPasswordOpen,
     openLogin,
     closeLogin,
     openSignup,
     closeSignup,
+    openForgotPassword,
+    closeForgotPassword,
     switchToLogin,
     switchToSignup,
+    switchToForgotPassword,
   };
 
   return (

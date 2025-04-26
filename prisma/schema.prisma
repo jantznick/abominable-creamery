@@ -194,7 +194,6 @@ model PasswordResetToken {
   token     String   @unique // The unique reset token (e.g., UUID)
   userId    Int      // Relation to the User
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade) // Cascade delete if user is deleted
-  email     String   // User's email at the time of request (for verification)
   expiresAt DateTime // Timestamp when the token expires
   createdAt DateTime @default(now())
 

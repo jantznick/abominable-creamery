@@ -203,8 +203,7 @@ router.post('/request-password-reset', async (req: Request, res: Response) => {
                 data: {
                     token,
                     userId: user.id,
-                    email: user.email, // Store email used for request for extra verification
-                    expiresAt,
+                    expiresAt
                 },
             });
 
@@ -231,15 +230,13 @@ router.post('/request-password-reset', async (req: Request, res: Response) => {
 
 // POST /api/auth/reset-password
 router.post('/reset-password', async (req: Request, res: Response) => {
-    const { token, email, password } = req.body;
+    const { token, password } = req.body;
 
     // Basic Validation
-    if (!token || !email || !password) {
-        return res.status(400).json({ message: 'Token, email, and new password are required.' });
+    if (!token || !password) {
+        return res.status(400).json({ message: 'Token, and new password are required.' });
     }
-    if (!isValidEmail(email)) {
-        return res.status(400).json({ message: 'Invalid email format.' });
-    }
+
     if (password.length < 6) { // Reuse same password length requirement
         return res.status(400).json({ message: 'Password must be at least 6 characters long.' });
     }
@@ -253,12 +250,8 @@ router.post('/reset-password', async (req: Request, res: Response) => {
         if (!resetToken) {
             return res.status(400).json({ message: 'Invalid or expired password reset token.' });
         }
-        if (resetToken.email !== email) {
-             // Email in request doesn't match the one associated with the token
-            console.warn(`Password reset attempt with mismatched email for token ${token}. Request email: ${email}, Token email: ${resetToken.email}`);
-            return res.status(400).json({ message: 'Invalid password reset request.' });
-        }
-         if (new Date() > resetToken.expiresAt) {
+
+		if (new Date() > resetToken.expiresAt) {
             // Clean up expired token while we're here (optional, could also have a scheduled job)
             await prisma.passwordResetToken.delete({ where: { id: resetToken.id } });
             return res.status(400).json({ message: 'Password reset token has expired.' });

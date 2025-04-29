@@ -47,6 +47,7 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 ### 2.5. Integrations
 
 *   **Payments:** Stripe (`stripe`, `@stripe/react-stripe-js`, `@stripe/stripe-js`) - Integrated for payment processing via Payment Intents and Payment Element.
+*   **Email:** SendGrid (`@sendgrid/mail`) - Used for transactional emails (e.g., order confirmation, password reset). Requires `SENDGRID_API_KEY` and optionally `SENDGRID_FROM_EMAIL` environment variables.
 
 ## 3. Project Structure
 
@@ -153,6 +154,7 @@ The project is a web application for an ice cream shop, built using Node.js, Rea
 *   **Styling:** Primarily via Tailwind CSS utility classes applied directly in components. Base styles in `src/styles/style.css`.
 *   **Data Fetching:** To be implemented via backend API endpoints using Express and Prisma.
 *   **Environment Variables:** Managed via `.env` file. Requires `DATABASE_URL`, `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `SESSION_SECRET`.
+*   **Environment Variables:** Managed via `.env` file. Requires `DATABASE_URL`, `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `SESSION_SECRET`, `SENDGRID_API_KEY`, and optionally `SENDGRID_FROM_EMAIL`.
 *   **Database Schema:** Defined in `prisma/schema.prisma`.
 *   **Migrations:** Managed via `npx prisma migrate dev`.
 *   **Authentication:** Session-based using `express-session` and `connect-pg-simple`.

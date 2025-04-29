@@ -4,6 +4,7 @@ import { z, infer as ZodInfer } from 'zod'; // Using Zod for validation
 import { Prisma } from '@prisma/client'; // Import Prisma types
 import Stripe from 'stripe'; // Import Stripe
 import dotenv from 'dotenv'; // Import dotenv
+import { sendEmail } from '../../utils/emailService'; // <-- Import sendEmail
 
 // Load environment variables
 dotenv.config();
@@ -191,8 +192,41 @@ router.post('/', async (req: Request, res: Response) => {
 			return order;
 		});
 
-		// --- Removed Stripe PaymentIntent Metadata Update --- 
-		// This should be handled by the webhook using the checkoutAttemptId from event metadata
+		// --- Send Order Confirmation Email --- 
+		const emailTemplateId = process.env.SENDGRID_ORDER_CONFIRMATION_TEMPLATE_ID || 'd-placeholder_order_confirmation_template_id'; 
+		
+		try {
+			// Format items for email (example: "2 x Vanilla Bean")
+			const emailItems = cartItems.map(item => `${item.quantity} x ${item.productName}`);
+			
+			await sendEmail({
+				to: contactInfo.email, // Use the validated contact email
+				subject: `Your Abominable Creamery Order #${newOrder.id} Confirmed!`,
+				templateId: emailTemplateId, 
+				dynamicTemplateData: {
+					order_id: newOrder.id,
+					customer_name: shippingAddress.fullName, // Use shipping name
+					order_items: emailItems, // Array of strings like "2 x Vanilla Bean"
+					total_amount: totalAmount.toFixed(2), // Format as string with 2 decimals
+					shipping_address: {
+						name: shippingAddress.fullName,
+						address1: shippingAddress.address1,
+						address2: shippingAddress.address2 || '',
+						city: shippingAddress.city,
+						state: shippingAddress.state,
+						postal_code: shippingAddress.postalCode,
+						country: shippingAddress.country,
+					},
+					order_notes: notes || '', // Include notes if provided
+					// Add any other relevant data for your template
+				},
+			});
+			console.log(`Order confirmation email initiated for order ${newOrder.id} to ${contactInfo.email}`);
+		} catch (emailError) {
+			console.error(`Failed to send order confirmation email for order ${newOrder.id}:`, emailError);
+			// Log the error, but don't fail the response since the order was created.
+		}
+		// --------------------------------------
 
 		console.log(`Order ${newOrder.id} created successfully from CheckoutAttempt ${checkoutAttemptId}`);
 		res.status(201).json({ 

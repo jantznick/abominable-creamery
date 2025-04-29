@@ -16,6 +16,7 @@
 	"license": "ISC",
 	"dependencies": {
 		"@prisma/client": "^6.6.0",
+		"@sendgrid/mail": "^8.1.5",
 		"@stripe/react-stripe-js": "^3.6.0",
 		"@stripe/stripe-js": "^7.2.0",
 		"bcryptjs": "^3.0.2",

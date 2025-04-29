@@ -5,6 +5,7 @@ import prisma from '../db'; // Import the singleton instance
 import { SessionUser } from '../types';
 // import { v4 as uuidv4 } from 'uuid'; // REMOVE - Use built-in crypto
 import crypto from 'crypto'; // ADD - For randomUUID
+import { sendEmail } from '../../utils/emailService'; // <-- Import sendEmail
 
 const router: Router = express.Router();
 const SALT_ROUNDS = 10; // Cost factor for bcrypt hashing
@@ -189,7 +190,10 @@ router.post('/request-password-reset', async (req: Request, res: Response) => {
     }
 
     try {
-        const user = await prisma.user.findUnique({ where: { email } });
+        const user = await prisma.user.findUnique({ 
+            where: { email },
+            select: { id: true, email: true, name: true } // Select name for email personalization
+        });
 
         if (user) {
             // Generate a unique token
@@ -210,10 +214,29 @@ router.post('/request-password-reset', async (req: Request, res: Response) => {
             // Construct the reset URL (adjust FRONTEND_URL as needed)
             // TODO: Replace 'http://localhost:3000' with an environment variable for the frontend URL
             const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-            const resetUrl = `${frontendUrl}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
+            // Keep email param for now, frontend might use it, adjust if needed
+            const resetUrl = `${frontendUrl}/reset-password?token=${token}&email=${encodeURIComponent(email)}`; 
 
-            // Log the URL (replace with email sending later)
-            console.log(`Password Reset URL for ${email}: ${resetUrl}`);
+            // --- Replace console.log with email sending --- 
+            // console.log(`Password Reset URL for ${email}: ${resetUrl}`); // <-- REMOVE THIS LINE
+            const templateId = process.env.SENDGRID_PASSWORD_RESET_TEMPLATE_ID || 'd-placeholder_forgot_password_template_id'; // Use env var or placeholder
+            
+            try {
+                await sendEmail({
+                    to: user.email,
+                    subject: 'Reset Your Abominable Creamery Password',
+                    templateId: templateId, 
+                    dynamicTemplateData: {
+                        reset_url: resetUrl, // Pass the full URL to the template
+                        name: user.name || user.email || 'Customer', // Personalize if name exists
+                    },
+                });
+                console.log(`Password reset email initiated for ${user.email}`);
+            } catch (emailError) {
+                console.error(`Failed to send password reset email to ${user.email}:`, emailError);
+                // Log error but continue to prevent user enumeration
+            }
+            // ------------------------------------------
         }
 
         // Always return a generic success message regardless of whether the user was found
